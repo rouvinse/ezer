@@ -1,0 +1,54 @@
+name: ACIA CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run smoke test
+        env:
+          DB_ENGINE: sqlite
+        run: |
+          python -c "
+          from data.generate import build_database
+          build_database()
+          from models.orchestrator import train_all, run_inference_and_store
+          train_all(verbose=False)
+          run_inference_and_store(verbose=False)
+          from agent.runner import run_agent_cycle
+          run_agent_cycle(use_llm=False, verbose=False)
+          from utils.db import get_connection
+          conn = get_connection()
+          c = conn.execute('SELECT COUNT(*) FROM customers').fetchone()[0]
+          p = conn.execute(\"SELECT COUNT(*) FROM ml_predictions\").fetchone()[0]
+          conn.close()
+          assert c == 500, f'Expected 500 customers, got {c}'
+          assert p == 500, f'Expected 500 predictions, got {p}'
+          print(f'✅ Smoke test passed — {c} customers, {p} predictions')
+          "
+
+      - name: Test API imports
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from api import create_app
+          app = create_app()
+          print('✅ API imports OK')
+          "

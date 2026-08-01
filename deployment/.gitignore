@@ -1,0 +1,48 @@
+# ACIA — Git ignore file
+
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.production
+
+# Database files — too large and contain sensitive data
+data/acia.db
+data/*.db
+
+# Trained ML models — regenerate with python main.py --setup
+models/artifacts/
+*.pkl
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+.coverage
+htmlcov/
