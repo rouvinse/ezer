@@ -142,11 +142,12 @@ def row_to_dict(row) -> dict:
 
 def create_app() -> "FastAPI":
     app = FastAPI(
-        title="ACIA — Autonomous CRM Intelligence Agent",
+        title="EZER — Autonomous CRM Intelligence Agent",
         description=(
-            "AI-powered CRM system that predicts churn and conversion, "
-            "then autonomously executes engagement actions.\n\n"
-            "Built with: Python · SQLite · scikit-learn · Claude API"
+            "Built to prevent churn, retain customers, and grow revenue.\n\n"
+            "EZER watches every customer relationship, predicts who is about to leave, "
+            "and acts automatically — before it's too late.\n\n"
+            "Built with: Python · PostgreSQL · scikit-learn · Claude API"
         ),
         version="1.0.0",
         docs_url="/docs",
