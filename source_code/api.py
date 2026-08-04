@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from connectors.manager import add_all_connector_endpoints
 
 # FastAPI imports — install with: pip install fastapi uvicorn
 try:
@@ -715,6 +716,8 @@ def create_app() -> "FastAPI":
     def my_stats(company: dict = Depends(require_auth)):
         """Return data stats for the authenticated company."""
         return get_tenant_stats(company["company_id"])
+
+    add_all_connector_endpoints(app, require_auth)
 
     return app
 
