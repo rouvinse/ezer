@@ -182,31 +182,6 @@ def create_app() -> "FastAPI":
         redoc_url="/redoc",
     )
 
-    # ── Security middleware ───────────────────────────────────────────────────
-    @app.middleware("http")
-    async def security_middleware(request: Request, call_next):
-        """HTTPS enforcement + security headers in one middleware."""
-        # HTTPS redirect in production
-        forwarded_proto = request.headers.get("x-forwarded-proto", "")
-        if forwarded_proto == "http":
-            url = str(request.url).replace("http://", "https://", 1)
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url=url, status_code=301)
-
-        # Process request
-        try:
-            response = await call_next(request)
-        except Exception:
-            from fastapi.responses import JSONResponse
-            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
-
-        # Add security headers
-        response.headers["X-Content-Type-Options"]    = "nosniff"
-        response.headers["X-Frame-Options"]           = "DENY"
-        response.headers["X-XSS-Protection"]          = "1; mode=block"
-        response.headers["Referrer-Policy"]           = "strict-origin-when-cross-origin"
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        return response
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     limiter = Limiter(key_func=get_remote_address)
