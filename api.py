@@ -182,25 +182,25 @@ def create_app() -> "FastAPI":
         redoc_url="/redoc",
     )
 
-    # ── HTTPS enforcement ─────────────────────────────────────────────────────
+    # ── Security middleware ───────────────────────────────────────────────────
     @app.middleware("http")
-    async def enforce_https(request: Request, call_next):
-        """Redirect HTTP to HTTPS in production."""
+    async def security_middleware(request: Request, call_next):
+        """HTTPS enforcement + security headers in one middleware."""
+        # HTTPS redirect in production
         forwarded_proto = request.headers.get("x-forwarded-proto", "")
         if forwarded_proto == "http":
             url = str(request.url).replace("http://", "https://", 1)
-            return JSONResponse(
-                status_code=301,
-                headers={"Location": url},
-                content={"detail": "Please use HTTPS"},
-            )
-        return await call_next(request)
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=url, status_code=301)
 
-    # ── Security headers ───────────────────────────────────────────────────────
-    @app.middleware("http")
-    async def add_security_headers(request: Request, call_next):
-        """Add standard security headers to every response."""
-        response = await call_next(request)
+        # Process request
+        try:
+            response = await call_next(request)
+        except Exception:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+        # Add security headers
         response.headers["X-Content-Type-Options"]    = "nosniff"
         response.headers["X-Frame-Options"]           = "DENY"
         response.headers["X-XSS-Protection"]          = "1; mode=block"
