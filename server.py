@@ -82,7 +82,7 @@ if __name__ == "__main__":
         "api:app",
         host=host,
         port=port,
-        reload=False,          # No reload in production
-        workers=1,             # Single worker (ML models not thread-safe)
+        reload=False,
+        workers=1,
         log_level="info",
     )
