@@ -28,6 +28,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from utils.db import get_connection, read_sql
 from utils.tenancy import tenant_context, get_tenant_stats, list_tenants, provision_tenant
+from connectors.manager import add_all_connector_endpoints
 from actions.approval import (
     get_approval_queue, get_approval_stats, approve_action, reject_action,
     bulk_approve, approve_all_pending, get_approval_history,
@@ -142,12 +143,11 @@ def row_to_dict(row) -> dict:
 
 def create_app() -> "FastAPI":
     app = FastAPI(
-        title="EZER — Autonomous CRM Intelligence Agent",
+        title="ACIA — Autonomous CRM Intelligence Agent",
         description=(
-            "Built to prevent churn, retain customers, and grow revenue.\n\n"
-            "EZER watches every customer relationship, predicts who is about to leave, "
-            "and acts automatically — before it's too late.\n\n"
-            "Built with: Python · PostgreSQL · scikit-learn · Claude API"
+            "AI-powered CRM system that predicts churn and conversion, "
+            "then autonomously executes engagement actions.\n\n"
+            "Built with: Python · SQLite · scikit-learn · Claude API"
         ),
         version="1.0.0",
         docs_url="/docs",
@@ -637,7 +637,9 @@ def create_app() -> "FastAPI":
     ):
         """Approve every pending_approval action for this company at once."""
         ensure_approval_schema()
-        return approve_all_pending(
+        add_all_connector_endpoints(app, require_auth)
+
+    return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
         )
