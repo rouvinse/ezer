@@ -15,14 +15,10 @@ from typing import Optional
 
 # FastAPI imports — install with: pip install fastapi uvicorn
 try:
-    from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Security, Depends, Request
+    from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Security, Depends
     from fastapi.security import APIKeyHeader
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
     from pydantic import BaseModel
-    from slowapi import Limiter, _rate_limit_exceeded_handler
-    from slowapi.util import get_remote_address
-    from slowapi.errors import RateLimitExceeded
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
@@ -183,11 +179,6 @@ def create_app() -> "FastAPI":
     )
 
 
-    # ── Rate limiting ─────────────────────────────────────────────────────────
-    limiter = Limiter(key_func=get_remote_address)
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -236,8 +227,7 @@ def create_app() -> "FastAPI":
     # ── Key management endpoints ──────────────────────────────────────────────
 
     @app.post("/auth/keys", tags=["Auth"])
-    @limiter.limit("10/hour")
-    def issue_api_key(request: Request,
+    def issue_api_key(
         company_name: str,
         email:        str,
         key_type:     str = "live",
@@ -530,8 +520,7 @@ def create_app() -> "FastAPI":
             conn.close()
 
     @app.post("/actions/execute", tags=["Actions"])
-    @limiter.limit("30/hour")
-    def execute_actions(request: Request,req: ExecuteRequest, background_tasks: BackgroundTasks, company: dict = Depends(require_auth)):
+    def execute_actions(req: ExecuteRequest, background_tasks: BackgroundTasks, company: dict = Depends(require_auth)):
         """
         Execute pending actions from the queue.
         Returns execution results immediately (synchronous).
@@ -553,8 +542,7 @@ def create_app() -> "FastAPI":
     # ── Agent ─────────────────────────────────────────────────────────────────
 
     @app.post("/agent/run", response_model=AgentCycleResult, tags=["Agent"])
-    @limiter.limit("20/hour")
-    def run_agent(request: Request,
+    def run_agent(
         use_llm:    bool = Query(True,  description="Use Claude API for LLM planning"),
         llm_budget: int  = Query(20,    description="Max LLM calls per cycle"),
         company:    dict = Depends(require_auth),
@@ -569,8 +557,7 @@ def create_app() -> "FastAPI":
         return AgentCycleResult(**summary)
 
     @app.post("/agent/train", tags=["Agent"])
-    @limiter.limit("5/hour")
-    def train_models(request: Request,req: TrainRequest, company: dict = Depends(require_admin)):
+    def train_models(req: TrainRequest, company: dict = Depends(require_admin)):
         """Retrain ML models and/or re-run inference on all customers."""
         from models.orchestrator import train_all, run_inference_and_store
         result = {}
