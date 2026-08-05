@@ -717,10 +717,7 @@ def create_app() -> "FastAPI":
         """Return data stats for the authenticated company."""
         return get_tenant_stats(company["company_id"])
 
-    # Register connector endpoints
     try:
-        from connectors.manager import add_all_connector_endpoints
-        add_all_connector_endpoints(app, require_auth)
     except Exception:
         pass
 
