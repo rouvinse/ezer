@@ -15,10 +15,14 @@ from typing import Optional
 
 # FastAPI imports — install with: pip install fastapi uvicorn
 try:
-    from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Security, Depends
+    from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Security, Depends, Request
     from fastapi.security import APIKeyHeader
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
     from pydantic import BaseModel
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
@@ -100,13 +104,38 @@ class ExecuteRequest(BaseModel):
     limit:   int = 50
     dry_run: bool = False
 
+    class Config:
+        str_max_length = 500
+
+class ValidatedStr(str):
+    """String that strips dangerous characters."""
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v):
+        if not isinstance(v, str):
+            raise ValueError("Must be a string")
+        # Strip null bytes and control characters
+        v = v.replace("\x00", "").strip()
+        if len(v) > 1000:
+            raise ValueError("String too long")
+        return cls(v)
+
 class ApproveRequest(BaseModel):
     decided_by:    str = "human"
     edited_reason: str | None = None
 
+    class Config:
+        str_max_length = 2000
+
 class RejectRequest(BaseModel):
     rejection_note: str = ""
     decided_by:     str = "human"
+
+    class Config:
+        str_max_length = 2000
 
 class BulkApproveRequest(BaseModel):
     action_ids: list[str]
@@ -152,6 +181,37 @@ def create_app() -> "FastAPI":
         docs_url="/docs",
         redoc_url="/redoc",
     )
+
+    # ── HTTPS enforcement ─────────────────────────────────────────────────────
+    @app.middleware("http")
+    async def enforce_https(request: Request, call_next):
+        """Redirect HTTP to HTTPS in production."""
+        forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        if forwarded_proto == "http":
+            url = str(request.url).replace("http://", "https://", 1)
+            return JSONResponse(
+                status_code=301,
+                headers={"Location": url},
+                content={"detail": "Please use HTTPS"},
+            )
+        return await call_next(request)
+
+    # ── Security headers ───────────────────────────────────────────────────────
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next):
+        """Add standard security headers to every response."""
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"]    = "nosniff"
+        response.headers["X-Frame-Options"]           = "DENY"
+        response.headers["X-XSS-Protection"]          = "1; mode=block"
+        response.headers["Referrer-Policy"]           = "strict-origin-when-cross-origin"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     app.add_middleware(
         CORSMiddleware,
@@ -201,7 +261,8 @@ def create_app() -> "FastAPI":
     # ── Key management endpoints ──────────────────────────────────────────────
 
     @app.post("/auth/keys", tags=["Auth"])
-    def issue_api_key(
+    @limiter.limit("10/hour")
+    def issue_api_key(request: Request,
         company_name: str,
         email:        str,
         key_type:     str = "live",
@@ -494,7 +555,8 @@ def create_app() -> "FastAPI":
             conn.close()
 
     @app.post("/actions/execute", tags=["Actions"])
-    def execute_actions(req: ExecuteRequest, background_tasks: BackgroundTasks, company: dict = Depends(require_auth)):
+    @limiter.limit("30/hour")
+    def execute_actions(request: Request,req: ExecuteRequest, background_tasks: BackgroundTasks, company: dict = Depends(require_auth)):
         """
         Execute pending actions from the queue.
         Returns execution results immediately (synchronous).
@@ -516,7 +578,8 @@ def create_app() -> "FastAPI":
     # ── Agent ─────────────────────────────────────────────────────────────────
 
     @app.post("/agent/run", response_model=AgentCycleResult, tags=["Agent"])
-    def run_agent(
+    @limiter.limit("20/hour")
+    def run_agent(request: Request,
         use_llm:    bool = Query(True,  description="Use Claude API for LLM planning"),
         llm_budget: int  = Query(20,    description="Max LLM calls per cycle"),
         company:    dict = Depends(require_auth),
@@ -531,7 +594,8 @@ def create_app() -> "FastAPI":
         return AgentCycleResult(**summary)
 
     @app.post("/agent/train", tags=["Agent"])
-    def train_models(req: TrainRequest, company: dict = Depends(require_admin)):
+    @limiter.limit("5/hour")
+    def train_models(request: Request,req: TrainRequest, company: dict = Depends(require_admin)):
         """Retrain ML models and/or re-run inference on all customers."""
         from models.orchestrator import train_all, run_inference_and_store
         result = {}
