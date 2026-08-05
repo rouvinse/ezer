@@ -717,9 +717,6 @@ def create_app() -> "FastAPI":
         """Return data stats for the authenticated company."""
         return get_tenant_stats(company["company_id"])
 
-    try:
-    except Exception:
-        pass
 
 
     return app
