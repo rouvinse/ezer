@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
-from connectors.manager import add_all_connector_endpoints
 
 # FastAPI imports — install with: pip install fastapi uvicorn
 try:
@@ -29,6 +28,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from utils.db import get_connection, read_sql
 from utils.tenancy import tenant_context, get_tenant_stats, list_tenants, provision_tenant
+from connectors.manager import add_all_connector_endpoints
 from actions.approval import (
     get_approval_queue, get_approval_stats, approve_action, reject_action,
     bulk_approve, approve_all_pending, get_approval_history,
@@ -637,6 +637,8 @@ def create_app() -> "FastAPI":
     ):
         """Approve every pending_approval action for this company at once."""
         ensure_approval_schema()
+        add_all_connector_endpoints(app, require_auth)
+
         return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
