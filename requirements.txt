@@ -1,4 +1,4 @@
-# ACIA — Production Dependencies
+# EZER — Production Dependencies
 # Python 3.11+
 
 # ── Core ML & data ────────────────────────────────────────────────
@@ -13,7 +13,11 @@ uvicorn[standard]>=0.27.0
 pydantic>=2.0.0
 
 # ── Database ──────────────────────────────────────────────────────
-psycopg2-binary>=2.9.0      # PostgreSQL driver
+psycopg2-binary>=2.9.0
+
+# ── Connectors ────────────────────────────────────────────────────
+stripe>=7.0.0
+requests>=2.31.0
 
 # ── Environment ───────────────────────────────────────────────────
-python-dotenv>=1.0.0        # Load .env file
+python-dotenv>=1.0.0
