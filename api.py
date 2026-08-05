@@ -636,14 +636,8 @@ def create_app() -> "FastAPI":
     ):
         """Approve every pending_approval action for this company at once."""
         ensure_approval_schema()
-        # Register connector endpoints (graceful fail if connectors not available)
-    try:
-        from connectors.manager import add_all_connector_endpoints
-        add_all_connector_endpoints(app, require_auth)
-    except Exception:
-        pass
 
-    return approve_all_pending(
+        return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
         )
