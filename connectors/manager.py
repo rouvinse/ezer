@@ -163,12 +163,12 @@ def add_all_connector_endpoints(app, require_auth):
     add_hubspot_endpoints(app, require_auth)
 
     # Unified sync endpoint
-    class UnifiedSyncRequest(BaseModel):
+    class ConnectorUnifiedSyncRequest(BaseModel):
         connectors: list[str] = ["all"]  # ["stripe", "hubspot"] or ["all"]
 
     @app.post("/connectors/sync", tags=["Connectors"])
     def sync_all_connectors(
-        req:     UnifiedSyncRequest,
+        req:     ConnectorUnifiedSyncRequest,
         company: dict = Depends(require_auth),
     ):
         """

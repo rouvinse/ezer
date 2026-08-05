@@ -554,12 +554,12 @@ def add_stripe_endpoints(app, require_auth):
     from fastapi import Depends, HTTPException
     from pydantic import BaseModel
 
-    class StripeSyncRequest(BaseModel):
+    class StripeConnectorSyncRequest(BaseModel):
         fetch_invoices: bool = True
 
     @app.post("/connectors/stripe/sync", tags=["Connectors"])
     def stripe_sync(
-        req:     StripeSyncRequest,
+        req:     StripeConnectorSyncRequest,
         company: dict = Depends(require_auth),
     ):
         """

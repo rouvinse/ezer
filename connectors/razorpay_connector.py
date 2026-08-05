@@ -509,12 +509,12 @@ def add_razorpay_endpoints(app, require_auth):
     from fastapi import Depends, HTTPException
     from pydantic import BaseModel
 
-    class RazorpaySyncRequest(BaseModel):
+    class RazorpayConnectorSyncRequest(BaseModel):
         fetch_payments: bool = True
 
     @app.post("/connectors/razorpay/sync", tags=["Connectors"])
     def razorpay_sync(
-        req:     RazorpaySyncRequest,
+        req:     RazorpayConnectorSyncRequest,
         company: dict = Depends(require_auth),
     ):
         """Sync all Razorpay payments and customers into EZER."""

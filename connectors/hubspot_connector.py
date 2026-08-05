@@ -594,11 +594,11 @@ def add_hubspot_endpoints(app, require_auth):
     from fastapi import Depends, HTTPException
     from pydantic import BaseModel
 
-    class HubSpotSyncRequest(BaseModel):
+    class HubSpotConnectorSyncRequest(BaseModel):
         fetch_deals: bool = True
 
     @app.post("/connectors/hubspot/sync", tags=["Connectors"])
-    def hubspot_sync(req: HubSpotSyncRequest, company: dict = Depends(require_auth)):
+    def hubspot_sync(req: HubSpotConnectorSyncRequest, company: dict = Depends(require_auth)):
         """Sync all HubSpot contacts and deals into EZER."""
         if not HUBSPOT_ACCESS_TOKEN:
             raise HTTPException(status_code=400, detail="HUBSPOT_ACCESS_TOKEN not configured.")
