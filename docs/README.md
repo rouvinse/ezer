@@ -1,4 +1,4 @@
-# ACIA — Autonomous CRM Intelligence Agent
+# Ezer — Autonomous CRM Intelligence Agent
 
 An end-to-end agentic AI system that analyses customer data, predicts churn and conversion, and autonomously decides and executes engagement actions — all in a single Python project.
 
@@ -6,7 +6,7 @@ An end-to-end agentic AI system that analyses customer data, predicts churn and 
 
 ## What it does
 
-ACIA simulates a real-world CRM intelligence layer with four autonomous capabilities:
+Ezer simulates a real-world CRM intelligence layer with four autonomous capabilities:
 
 | Capability | Description |
 |---|---|
