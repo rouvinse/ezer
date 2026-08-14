@@ -51,6 +51,15 @@ def startup():
         print(f"   ✅ Setup complete")
     else:
         print(f"   ✅ Database ready ({count} customers)")
+        # Always retrain models to match current feature set
+        try:
+            from models.orchestrator import train_all, run_inference_and_store
+            print("   Retraining models...")
+            train_all(verbose=False)
+            run_inference_and_store(verbose=False)
+            print("   ✅ Models retrained")
+        except Exception as e:
+            print(f"   ⚠️  Model retrain failed: {e}")
 
     # Always ensure auth + approval schemas exist
     from utils.auth import ensure_auth_schema, bootstrap_admin_key
