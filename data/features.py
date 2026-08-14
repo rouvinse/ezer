@@ -98,6 +98,13 @@ def build_customer_features(company_id: str | None = None) -> pd.DataFrame:
         df["days_since_last_event"] == 0, 100,
         100 - np.clip(pd.to_numeric(df["days_since_last_event"], errors='coerce').fillna(0) * 1.5, 0, 100)
     )
+    # Convert all numeric columns to proper numeric types before calculations
+    numeric_cols = ["event_count_30d", "avg_session_sec", "open_rate", "click_rate",
+                    "cancellation_risk", "critical_tickets", "unresolved_rate", "refund_rate"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
     df["engagement_index"] = (
         df["event_count_30d"] * 2 +
         df["avg_session_sec"] / 60 +
