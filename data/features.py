@@ -96,7 +96,7 @@ def build_customer_features(company_id: str | None = None) -> pd.DataFrame:
     # ── Derived composite features ────────────────────────────────────────
     df["recency_score"] = np.where(
         df["days_since_last_event"] == 0, 100,
-        100 - np.clip(df["days_since_last_event"] * 1.5, 0, 100)
+        100 - np.clip(pd.to_numeric(df["days_since_last_event"], errors='coerce').fillna(0) * 1.5, 0, 100)
     )
     df["engagement_index"] = (
         df["event_count_30d"] * 2 +
