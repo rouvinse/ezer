@@ -331,6 +331,27 @@ def provision_tenant(
 
     conn = get_connection()
 
+    # Ensure company exists in companies table (for auth to work)
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        conn.execute(
+            "INSERT INTO companies (company_id, company_name, email, plan, is_active, created_at) "
+            "VALUES (?, ?, ?, ?, 1, ?) ON CONFLICT (company_id) DO NOTHING",
+            (company_id, company_name, f"admin@{company_id}.demo", "growth", now)
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO companies (company_id, company_name, email, plan, is_active, created_at) "
+                "VALUES (?, ?, ?, ?, 1, ?)",
+                (company_id, company_name, f"admin@{company_id}.demo", "growth", now)
+            )
+            conn.commit()
+        except Exception:
+            pass
+
     # Tag all rows with this tenant's company_id
     def tag(rows: list[dict]) -> list[dict]:
         for r in rows:
