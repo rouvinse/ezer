@@ -688,7 +688,7 @@ def create_app() -> "FastAPI":
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    return approve_all_pending(
+        return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
         )
