@@ -57,11 +57,11 @@ def run_setup(verbose: bool = True) -> None:
     print(f"  ✅  {len(preds)} customers scored.")
 
 
-def run_cycle(use_llm: bool = False, llm_budget: int = 20, verbose: bool = True) -> dict:
+def run_cycle(use_llm: bool = False, llm_budget: int = 20, verbose: bool = True, company_id: str = "default") -> dict:
     """Run one full agent decision + execution cycle."""
     stage("Stage 3 of 4 — Agent decision cycle")
     from agent.runner import run_agent_cycle
-    summary = run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget, verbose=verbose)
+    summary = run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget, verbose=verbose, company_id=company_id)
 
     stage("Stage 4 of 4 — Action execution + feedback")
     from actions.executor import execute_batch, print_execution_report
@@ -136,6 +136,7 @@ Examples:
     p.add_argument("--host",       default="0.0.0.0",   help="API host (default: 0.0.0.0)")
     p.add_argument("--port",       type=int, default=8000, help="API port (default: 8000)")
     p.add_argument("--quiet",      action="store_true", help="Suppress verbose output")
+    p.add_argument("--company-id",  default="default",   help="Company/tenant ID to run cycle on")
     return p
 
 
@@ -160,7 +161,8 @@ def main() -> None:
             print("⚠️  Database not found. Running setup first...")
             run_setup(verbose=False)
         print(BANNER)
-        run_cycle(use_llm=args.llm, llm_budget=args.llm_budget, verbose=verbose)
+        company_id = args.company_id.replace("-", "_") if hasattr(args, "company_id") else "default"
+        run_cycle(use_llm=args.llm, llm_budget=args.llm_budget, verbose=verbose, company_id=getattr(args, "company_id", "default"))
     else:
         run_full_pipeline(use_llm=args.llm, llm_budget=args.llm_budget)
 
