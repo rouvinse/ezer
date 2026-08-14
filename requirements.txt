@@ -21,3 +21,4 @@ requests>=2.31.0
 
 # ── Environment ───────────────────────────────────────────────────
 python-dotenv>=1.0.0
+# force rebuild Fri, Aug 14, 2026 10:43:03 PM
