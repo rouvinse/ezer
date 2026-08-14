@@ -140,6 +140,7 @@ def create_api_key(
     email:        str,
     key_type:     str = "live",
     notes:        str = "",
+    company_id:   str | None = None,
 ) -> dict:
     """
     Create a new API key for a company.
@@ -159,7 +160,7 @@ def create_api_key(
     """
     ensure_auth_schema()
 
-    company_id = get_or_create_company(company_name, email)
+    company_id = company_id or get_or_create_company(company_name, email)
     raw_key    = _generate_raw_key(key_type)
     key_hash   = _hash_key(raw_key)
     key_prefix = _extract_prefix(raw_key)

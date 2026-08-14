@@ -232,13 +232,15 @@ def create_app() -> "FastAPI":
         email:        str,
         key_type:     str = "live",
         notes:        str = "",
+        company_id:   str | None = None,
         _admin: dict  = Depends(require_admin),
     ):
         """
         Issue a new API key for a company. Admin key required.
+        Pass company_id to link to an existing provisioned tenant.
         The raw key is returned ONCE — store it securely.
         """
-        result = create_api_key(company_name, email, key_type, notes)
+        result = create_api_key(company_name, email, key_type, notes, company_id=company_id)
         return {
             "api_key":      result["api_key"],
             "key_id":       result["key_id"],
@@ -667,7 +669,26 @@ def create_app() -> "FastAPI":
     ):
         """Approve every pending_approval action for this company at once."""
         ensure_approval_schema()
-        return approve_all_pending(
+
+        # ── Temporary admin key reset (remove after use) ──────────────────────────
+    @app.get("/admin/reset-key", tags=["Auth"], include_in_schema=False)
+    def reset_admin_key(secret: str = Query(...)):
+        """One-time endpoint to reset admin key. Remove after use."""
+        if secret != "ezer-reset-2026":
+            raise HTTPException(status_code=403, detail="Invalid secret")
+        try:
+            from utils.db import get_connection
+            conn = get_connection()
+            conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
+            conn.commit()
+            conn.close()
+            from utils.auth import create_api_key
+            result = create_api_key("ACIA Admin", "admin@acia.internal", key_type="admin")
+            return {"new_admin_key": result["api_key"], "message": "Save this key — it won't be shown again"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
         )
@@ -747,22 +768,6 @@ def create_app() -> "FastAPI":
         """Return data stats for the authenticated company."""
         return get_tenant_stats(company["company_id"])
 
-
-    @app.get("/admin/reset-key", include_in_schema=False)
-    def reset_admin_key(secret: str = Query(...)):
-                        if secret != "ezer-reset-2026":
-                            raise HTTPException(status_code=403, detail="Invalid secret")
-                        try:
-                            from utils.db import get_connection
-                            conn = get_connection()
-                            conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
-                            conn.commit()
-                            conn.close()
-                            from utils.auth import create_api_key
-                            result = create_api_key("ACIA Admin", "admin@acia.internal", key_type="admin")
-                            return {"new_admin_key": result["api_key"]}
-                        except Exception as e:
-                            raise HTTPException(status_code=500, detail=str(e))
 
 
     return app
