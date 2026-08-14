@@ -29,10 +29,12 @@ def run_agent_cycle(
     llm_budget: int  = 20,
     company_id: str | None = None,
     verbose:    bool = True,
+    dry_run:    bool = False,
 ) -> dict:
     """
     Full agent decision cycle. Returns summary stats dict.
     Scoped to the current tenant or company_id if provided.
+    dry_run=True: previews actions without writing to DB (safe for demos).
     """
     start = datetime.now()
     cid   = company_id or get_tenant().company_id
@@ -69,7 +71,10 @@ def run_agent_cycle(
     if verbose:
         print(f"[3/3] Scheduling {len(plans)} plans...")
 
-    queue = schedule(plans, ltv_lookup, company_id=cid, verbose=verbose)
+    if dry_run:
+        queue = [{"action_id": f"preview_{i}", "customer_id": p.customer_id, "action_type": p.action_type, "priority": p.priority, "reason": p.reason} for i, p in enumerate(plans)]
+    else:
+        queue = schedule(plans, ltv_lookup, company_id=cid, verbose=verbose)
 
     elapsed = (datetime.now() - start).total_seconds()
 

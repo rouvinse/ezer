@@ -543,17 +543,22 @@ def create_app() -> "FastAPI":
 
     @app.post("/agent/run", response_model=AgentCycleResult, tags=["Agent"])
     def run_agent(
-        use_llm:    bool = Query(True,  description="Use Claude API for LLM planning"),
+        use_llm:    bool = Query(False, description="Use Claude API for LLM planning"),
         llm_budget: int  = Query(20,    description="Max LLM calls per cycle"),
+        dry_run:    bool = Query(True,  description="Preview actions without queuing them"),
         company:    dict = Depends(require_auth),
     ):
         """
         Trigger a full agent decision cycle:
         Rules → LLM Planner → Scheduler → DB queue.
+        Set dry_run=true to preview actions without queuing (safe for demos).
+        Set dry_run=false to actually queue actions.
         """
         from agent.runner import run_agent_cycle
         cid     = company["company_id"]
-        summary = run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget, company_id=cid, verbose=False)
+        summary = run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget, company_id=cid, verbose=False, dry_run=dry_run)
+        if dry_run:
+            summary["note"] = "dry_run=true — actions previewed but not queued"
         return AgentCycleResult(**summary)
 
     @app.post("/agent/train", tags=["Agent"])

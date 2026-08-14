@@ -91,7 +91,8 @@ def high_churn_send_retention(row):
 @rule("CHN-003", priority=3)
 def dormant_re_engagement(row):
     """Customer hasn't engaged in 30+ days — re-engagement campaign."""
-    if row["days_since_last_event"] >= 30 and row["churn_score"] >= 0.35:
+    days = pd.to_numeric(row["days_since_last_event"], errors="coerce")
+    if pd.notna(days) and days >= 30 and row["churn_score"] >= 0.35:
         return ActionCandidate(
             customer_id=row["customer_id"],
             action_type="send_reengagement_email",
