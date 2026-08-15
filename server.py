@@ -37,29 +37,26 @@ def startup():
         count = 0
 
     if count == 0:
-        print("   First boot — generating data + training models...")
-        from data.generate import build_database
-        build_database()
-
-        from models.orchestrator import train_all, run_inference_and_store
-        train_all(verbose=False)
-        run_inference_and_store(verbose=False)
-
-        from agent.runner import run_agent_cycle
-        run_agent_cycle(use_llm=False, verbose=False)
-
-        print(f"   ✅ Setup complete")
+        print("   First boot — creating schema only...")
+        try:
+            from utils.db import get_schema
+            conn2 = get_connection()
+            conn2.executescript(get_schema())
+            conn2.commit()
+            conn2.close()
+            print("   ✅ Schema created")
+        except Exception as e:
+            print(f"   ⚠️  Schema error: {e}")
+        print("   ℹ️  Use POST /tenants/{id}/provision to load test data")
     else:
         print(f"   ✅ Database ready ({count} customers)")
-        # Always retrain models to match current feature set
         try:
             from models.orchestrator import train_all, run_inference_and_store
-            print("   Retraining models...")
             train_all(verbose=False)
             run_inference_and_store(verbose=False)
-            print("   ✅ Models retrained")
+            print("   ✅ Models ready")
         except Exception as e:
-            print(f"   ⚠️  Model retrain failed: {e}")
+            print(f"   ⚠️  Model training skipped: {e}")
 
     # Always ensure auth + approval schemas exist
     from utils.auth import ensure_auth_schema, bootstrap_admin_key

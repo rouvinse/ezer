@@ -12,7 +12,7 @@ from pathlib import Path
 random.seed(42)
 
 # ── Config ──────────────────────────────────────────────────────────────────
-NUM_CUSTOMERS   = 500
+NUM_CUSTOMERS   = 100  # Reduced for faster boot; use /tenants endpoint for 500
 NUM_PRODUCTS    = 30
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.db import get_connection, get_schema
