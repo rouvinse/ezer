@@ -212,12 +212,12 @@ def read_sql(query: str, params=None) -> "pd.DataFrame":
     """
     Execute a SELECT query and return a pandas DataFrame.
     Works with both SQLite and PostgreSQL.
-    Uses cursor-based fetching to avoid pandas connection warnings.
     """
     import pandas as pd
     conn = get_connection()
     try:
         adapted = conn._adapt_sql(query)
+        # Use regular cursor (not RealDictCursor) for consistent behavior
         cur = conn._conn.cursor()
         if params:
             cur.execute(adapted, params)
@@ -225,12 +225,17 @@ def read_sql(query: str, params=None) -> "pd.DataFrame":
             cur.execute(adapted)
         rows = cur.fetchall()
         if not rows:
-            # Return empty DataFrame with correct columns
             col_names = [d[0] for d in cur.description] if cur.description else []
             return pd.DataFrame(columns=col_names)
-        # Build DataFrame from rows
-        col_names = [d[0] for d in cur.description]
-        return pd.DataFrame([dict(zip(col_names, row)) for row in rows])
+        # RealDictCursor returns dict-like rows — use directly
+        # Regular cursor returns tuples — zip with col_names
+        first = rows[0]
+        if hasattr(first, 'keys'):
+            # RealDictRow or dict — already has correct keys/values
+            return pd.DataFrame([dict(row) for row in rows])
+        else:
+            col_names = [d[0] for d in cur.description]
+            return pd.DataFrame([dict(zip(col_names, row)) for row in rows])
     finally:
         conn.close()
 
