@@ -58,6 +58,13 @@ def startup():
         except Exception as e:
             print(f"   ⚠️  Model training skipped: {e}")
 
+    # Always ensure admin key is valid in DB
+    try:
+        from utils.auth import ensure_admin_key_in_db
+        ensure_admin_key_in_db()
+    except Exception as e:
+        print(f"   ⚠️  Admin key setup: {e}")
+
     # Always ensure auth + approval schemas exist
     from utils.auth import ensure_auth_schema, bootstrap_admin_key
     from utils.tenancy import run_tenant_migration
