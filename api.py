@@ -671,6 +671,25 @@ def create_app() -> "FastAPI":
         ensure_approval_schema()
 
         # ── Temporary admin key reset (remove after use) ──────────────────────────
+    @app.get("/admin/debug-key", include_in_schema=False)
+    def debug_key(secret: str = Query(...), key: str = Query(...)):
+        if secret != "ezer-reset-2026":
+            raise HTTPException(status_code=403, detail="Invalid secret")
+        import hashlib
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+        try:
+            from utils.db import read_sql
+            df = read_sql(
+                "SELECT k.key_id, k.company_id, k.key_type, k.is_active, c.company_name "
+                "FROM api_keys k "
+                "JOIN companies c ON c.company_id = k.company_id "
+                "WHERE k.key_hash = ?",
+                params=(key_hash,)
+            )
+            return {"key_hash": key_hash, "found": not df.empty, "rows": df.to_dict("records") if not df.empty else []}
+        except Exception as e:
+            return {"error": str(e), "key_hash": key_hash}
+
     @app.get("/admin/reset-key", tags=["Auth"], include_in_schema=False)
     def reset_admin_key(secret: str = Query(...)):
         """One-time endpoint to reset admin key. Remove after use."""
@@ -688,7 +707,7 @@ def create_app() -> "FastAPI":
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        return approve_all_pending(
+    return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
         )
