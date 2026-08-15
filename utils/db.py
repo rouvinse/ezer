@@ -92,14 +92,23 @@ class ACIAConnection:
         if self._engine == "sqlite":
             self._conn.executescript(script)
         else:
-            # PostgreSQL doesn't have executescript — split on ; and run each
+            # PostgreSQL: split on ; and run each statement
             statements = [s.strip() for s in script.split(";") if s.strip()]
             cur = self._conn.cursor()
             for stmt in statements:
+                if not stmt:
+                    continue
                 try:
                     cur.execute(stmt)
-                except Exception:
-                    pass  # Skip errors on IF NOT EXISTS statements
+                    self._conn.commit()
+                except Exception as e:
+                    self._conn.rollback()
+                    # Only skip truly ignorable errors
+                    err = str(e).lower()
+                    if "already exists" in err or "does not exist" in err:
+                        pass
+                    else:
+                        raise
 
     def commit(self):
         self._conn.commit()
@@ -236,10 +245,18 @@ def read_sql(query: str, params=None) -> "pd.DataFrame":
 #   - Added IF NOT EXISTS everywhere
 
 PG_SCHEMA = """
+DROP TABLE IF EXISTS ml_predictions CASCADE;
+DROP TABLE IF EXISTS agent_actions CASCADE;
+DROP TABLE IF EXISTS email_log CASCADE;
+DROP TABLE IF EXISTS support_tickets CASCADE;
+DROP TABLE IF EXISTS engagement_events CASCADE;
+DROP TABLE IF EXISTS transactions CASCADE;
+DROP TABLE IF EXISTS customers CASCADE;
+
 CREATE TABLE IF NOT EXISTS customers (
     customer_id     VARCHAR(36) PRIMARY KEY,
     name            TEXT,
-    email           TEXT UNIQUE,
+    email           TEXT,
     company         TEXT,
     industry        TEXT,
     plan            TEXT,
@@ -251,7 +268,8 @@ CREATE TABLE IF NOT EXISTS customers (
     nps_score       INTEGER,
     is_churned      INTEGER,
     churn_date      TEXT,
-    created_at      TEXT
+    created_at      TEXT,
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -263,8 +281,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     product_id      TEXT,
     status          TEXT,
     txn_date        TEXT,
-    company_id      TEXT DEFAULT 'default',
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS engagement_events (
@@ -275,8 +292,7 @@ CREATE TABLE IF NOT EXISTS engagement_events (
     session_duration INTEGER,
     event_date      TEXT,
     metadata        TEXT,
-    company_id      TEXT DEFAULT 'default',
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS support_tickets (
@@ -288,8 +304,7 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     sentiment_score DOUBLE PRECISION,
     opened_at       TEXT,
     resolved_at     TEXT,
-    company_id      TEXT DEFAULT 'default',
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS email_log (
@@ -300,8 +315,7 @@ CREATE TABLE IF NOT EXISTS email_log (
     opened          INTEGER,
     clicked         INTEGER,
     sent_at         TEXT,
-    company_id      TEXT DEFAULT 'default',
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS agent_actions (
@@ -310,25 +324,31 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     action_type     TEXT,
     reason          TEXT,
     priority        INTEGER,
-    status          TEXT DEFAULT 'pending',
+    status          TEXT DEFAULT 'pending_approval',
     outcome         TEXT,
     created_at      TEXT,
     executed_at     TEXT,
-    company_id      TEXT DEFAULT 'default',
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    decided_by      TEXT,
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS ml_predictions (
-    prediction_id   VARCHAR(36) PRIMARY KEY,
+    pred_id         VARCHAR(36) PRIMARY KEY,
     customer_id     VARCHAR(36),
     churn_score     DOUBLE PRECISION,
     conversion_score DOUBLE PRECISION,
     segment         TEXT,
-    ltv_estimate    DOUBLE PRECISION,
     predicted_at    TEXT,
-    company_id      TEXT DEFAULT 'default',
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
+
+CREATE INDEX IF NOT EXISTS idx_customers_company ON customers(company_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_company ON transactions(company_id);
+CREATE INDEX IF NOT EXISTS idx_events_company ON engagement_events(company_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_company ON support_tickets(company_id);
+CREATE INDEX IF NOT EXISTS idx_emails_company ON email_log(company_id);
+CREATE INDEX IF NOT EXISTS idx_actions_company ON agent_actions(company_id);
+CREATE INDEX IF NOT EXISTS idx_predictions_company ON ml_predictions(company_id);
 """
 
 # SQLite schema (original)
