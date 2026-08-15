@@ -202,20 +202,15 @@ def validate_api_key(raw_key: str) -> dict | None:
     key_hash = _hash_key(raw_key)
 
     try:
-        df = read_sql(
+        sql = (
             "SELECT k.key_id, k.company_id, k.company_name, k.key_type, "
             "k.is_active, k.revoked_at, c.plan, c.email "
             "FROM api_keys k "
             "JOIN companies c ON c.company_id = k.company_id "
-            "WHERE k.key_hash = %s" if DB_ENGINE == "postgresql" else
-            "SELECT k.key_id, k.company_id, k.company_name, k.key_type, "
-            "k.is_active, k.revoked_at, c.plan, c.email "
-            "FROM api_keys k "
-            "JOIN companies c ON c.company_id = k.company_id "
-            "WHERE k.key_hash = ?",
-            params=(key_hash,)
+            "WHERE k.key_hash = ?"
         )
-    except Exception:
+        df = read_sql(sql, params=(key_hash,))
+    except Exception as e:
         return None
 
     if df.empty:
