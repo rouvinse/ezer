@@ -159,48 +159,6 @@ def row_to_dict(row) -> dict:
         return row
     try:
         return dict(row)
-    except Exception:
-        return {}
-
-
-# ── App factory ───────────────────────────────────────────────────────────────
-
-def create_app() -> "FastAPI":
-    app = FastAPI(
-        title="ACIA — Autonomous CRM Intelligence Agent",
-        description=(
-            "AI-powered CRM system that predicts churn and conversion, "
-            "then autonomously executes engagement actions.\n\n"
-            "Built with: Python · SQLite · scikit-learn · Claude API"
-        ),
-        version="1.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
-    )
-
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # ── Authentication setup ──────────────────────────────────────────────────
-    # Ensure auth tables exist and admin key is bootstrapped
-    ensure_auth_schema()
-    bootstrap_admin_key()
-
-    API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-    def require_auth(api_key: str = Security(API_KEY_HEADER)) -> dict:
-        """
-        FastAPI dependency — validates X-API-Key header on every request.
-        Inject into any endpoint with: company=Depends(require_auth)
-        Returns company info dict on success, raises 401 on failure.
-        """
-        if not api_key:
-            raise HTTPException(
                 status_code=401,
                 detail="Missing API key. Include X-API-Key header.",
                 headers={"WWW-Authenticate": "ApiKey"},
@@ -707,7 +665,7 @@ def create_app() -> "FastAPI":
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    return approve_all_pending(
+        return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
         )
