@@ -39,6 +39,15 @@ def weighted_choice(options: list, weights: list):
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 SCHEMA = """
+-- Drop and recreate tables to ensure correct schema
+DROP TABLE IF EXISTS ml_predictions CASCADE;
+DROP TABLE IF EXISTS agent_actions CASCADE;
+DROP TABLE IF EXISTS email_log CASCADE;
+DROP TABLE IF EXISTS support_tickets CASCADE;
+DROP TABLE IF EXISTS engagement_events CASCADE;
+DROP TABLE IF EXISTS transactions CASCADE;
+DROP TABLE IF EXISTS customers CASCADE;
+
 CREATE TABLE IF NOT EXISTS customers (
     customer_id     TEXT PRIMARY KEY,
     name            TEXT,
