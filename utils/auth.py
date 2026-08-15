@@ -207,6 +207,11 @@ def validate_api_key(raw_key: str) -> dict | None:
             "k.is_active, k.revoked_at, c.plan, c.email "
             "FROM api_keys k "
             "JOIN companies c ON c.company_id = k.company_id "
+            "WHERE k.key_hash = %s" if DB_ENGINE == "postgresql" else
+            "SELECT k.key_id, k.company_id, k.company_name, k.key_type, "
+            "k.is_active, k.revoked_at, c.plan, c.email "
+            "FROM api_keys k "
+            "JOIN companies c ON c.company_id = k.company_id "
             "WHERE k.key_hash = ?",
             params=(key_hash,)
         )
@@ -226,10 +231,17 @@ def validate_api_key(raw_key: str) -> dict | None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         conn = get_connection()
-        conn.execute(
-            "UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?",
-            (now, key_hash)
-        )
+        from utils.db import DB_ENGINE as _eng
+        if _eng == "postgresql":
+            conn.execute(
+                "UPDATE api_keys SET last_used_at = %s WHERE key_hash = %s",
+                (now, key_hash)
+            )
+        else:
+            conn.execute(
+                "UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?",
+                (now, key_hash)
+            )
         conn.commit()
         conn.close()
     except Exception:
@@ -346,7 +358,9 @@ def bootstrap_admin_key() -> str | None:
         conn.close()
         print(f"   ✅ Admin key registered: {FIXED_KEY[:25]}...")
     except Exception as e:
-        print(f"   ⚠️  Admin key error: {e}")
+        import traceback
+        print(f"   ❌ Admin key error: {e}")
+        traceback.print_exc()
 
     return FIXED_KEY
 
