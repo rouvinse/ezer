@@ -286,145 +286,68 @@ def list_api_keys(company_id: str | None = None) -> list[dict]:
 
 def bootstrap_admin_key() -> str | None:
     """
-    Create the initial admin API key if none exists.
-    If ACIA_ADMIN_KEY env var is set, uses that as the fixed key.
+    Register the permanent admin key from ACIA_ADMIN_KEY env variable.
+    If not set, generate one.
     """
-    import os, hashlib
+    import os, hashlib, uuid
+    from datetime import datetime
+
     ensure_auth_schema()
 
-    fixed_key = os.environ.get("ACIA_ADMIN_KEY", "")
-
-    if fixed_key:
-        # Use the fixed key from environment — upsert it
-        key_hash = hashlib.sha256(fixed_key.encode()).hexdigest()
+    FIXED_KEY = os.environ.get("ACIA_ADMIN_KEY", "")
+    if not FIXED_KEY:
+        # Check if any admin key exists
         try:
-            conn = get_connection()
-            # Check if this exact key already exists
-            df = read_sql("SELECT key_id FROM api_keys WHERE key_hash = %s" if os.environ.get("DB_ENGINE","sqlite") == "postgresql" else "SELECT key_id FROM api_keys WHERE key_hash = ?",
-                         params=(key_hash,))
+            df = read_sql("SELECT key_id FROM api_keys WHERE key_type = 'admin' AND is_active = 1")
             if not df.empty:
-                return None  # Already registered
+                return None
+        except Exception:
+            pass
+        FIXED_KEY = "acia_admin_sk_" + __import__("secrets").token_hex(32)
 
-            # Delete old admin keys and insert the fixed one
-            conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
-            conn.commit()
+    key_hash = hashlib.sha256(FIXED_KEY.encode()).hexdigest()
 
-            # Get or create admin company
-            company_id = get_or_create_company("ACIA Admin", "admin@acia.internal")
-            key_id = str(__import__("uuid").uuid4())
-            now = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            prefix = fixed_key[:20]
-
-            conn.execute(
-                "INSERT INTO api_keys (key_id, company_id, company_name, key_hash, key_prefix, key_type, is_active, created_at, notes) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)" if os.environ.get("DB_ENGINE","sqlite") != "postgresql" else
-                "INSERT INTO api_keys (key_id, company_id, company_name, key_hash, key_prefix, key_type, is_active, created_at, notes) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s)",
-                (key_id, company_id, "ACIA Admin", key_hash, prefix, "admin", now, "Fixed admin key from environment")
-            )
-            conn.commit()
-            conn.close()
-            print(f"   ✅ Admin key registered from environment variable")
-        except Exception as e:
-            print(f"   ⚠️  Admin key setup error: {e}")
-        return fixed_key
-
-    # No fixed key — check if one already exists
+    # Check if this key is already registered
     try:
-        df = read_sql("SELECT key_id FROM api_keys WHERE key_type = 'admin' AND is_active = 1")
+        from utils.db import DB_ENGINE
+        if DB_ENGINE == "postgresql":
+            df = read_sql("SELECT key_id FROM api_keys WHERE key_hash = %s", params=(key_hash,))
+        else:
+            df = read_sql("SELECT key_id FROM api_keys WHERE key_hash = ?", params=(key_hash,))
         if not df.empty:
-            return None
+            return None  # Already registered
     except Exception:
         pass
 
-    result = create_api_key(
-        company_name="ACIA Admin",
-        email="admin@acia.internal",
-        key_type="admin",
-        notes="Auto-generated admin key on first startup",
-    )
+    # Clear old admin keys and register the fixed one
+    try:
+        conn = get_connection()
+        conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
+        conn.commit()
 
-    print(f"\n{'='*56}")
-    print(f"  🔑  ACIA Admin API Key Generated")
-    print(f"{'='*56}")
-    print(f"  Key : {result['api_key']}")
-    print(f"{'='*56}\n")
+        company_id = get_or_create_company("ACIA Admin", "admin@acia.internal")
+        key_id = str(uuid.uuid4())
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    return result["api_key"]
-
-
-# ── CLI for key management ────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import sys
-    import argparse
-
-    parser = argparse.ArgumentParser(description="ACIA API Key Management")
-    sub    = parser.add_subparsers(dest="command")
-
-    # create
-    p_create = sub.add_parser("create", help="Create a new API key")
-    p_create.add_argument("--company", required=True, help="Company name")
-    p_create.add_argument("--email",   required=True, help="Company email")
-    p_create.add_argument("--type",    default="live", choices=["live","test","admin"])
-    p_create.add_argument("--notes",   default="")
-
-    # revoke
-    p_revoke = sub.add_parser("revoke", help="Revoke an API key")
-    p_revoke.add_argument("key_id", help="Key ID to revoke")
-
-    # list
-    p_list = sub.add_parser("list", help="List all API keys")
-    p_list.add_argument("--company-id", default=None)
-
-    # validate
-    p_val = sub.add_parser("validate", help="Validate an API key")
-    p_val.add_argument("api_key", help="Raw API key to validate")
-
-    # bootstrap
-    sub.add_parser("bootstrap", help="Create initial admin key")
-
-    args = parser.parse_args()
-
-    if args.command == "create":
-        result = create_api_key(args.company, args.email, args.type, args.notes)
-        print(f"\n✅ API Key Created")
-        print(f"   Company : {result['company_name']}")
-        print(f"   Type    : {result['key_type']}")
-        print(f"   Key ID  : {result['key_id']}")
-        print(f"\n   🔑  API Key (save this — shown once):")
-        print(f"   {result['api_key']}\n")
-
-    elif args.command == "revoke":
-        success = revoke_api_key(args.key_id)
-        print(f"{'✅ Revoked' if success else '❌ Failed'}: {args.key_id}")
-
-    elif args.command == "list":
-        keys = list_api_keys(args.company_id)
-        if not keys:
-            print("No API keys found.")
+        from utils.db import DB_ENGINE
+        if DB_ENGINE == "postgresql":
+            conn.execute(
+                "INSERT INTO api_keys (key_id, company_id, company_name, key_hash, key_prefix, key_type, is_active, created_at, notes) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s)",
+                (key_id, company_id, "ACIA Admin", key_hash, FIXED_KEY[:20], "admin", now, "Permanent admin key")
+            )
         else:
-            print(f"\n{'Key ID':38} {'Company':20} {'Type':6} {'Active':6} {'Last Used'}")
-            print("─" * 90)
-            for k in keys:
-                active    = "✅" if k.get("is_active") else "❌"
-                last_used = k.get("last_used_at") or "never"
-                print(f"  {k['key_id']:36} {k['company_name']:20} {k['key_type']:6} {active:6} {last_used}")
+            conn.execute(
+                "INSERT INTO api_keys (key_id, company_id, company_name, key_hash, key_prefix, key_type, is_active, created_at, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (key_id, company_id, "ACIA Admin", key_hash, FIXED_KEY[:20], "admin", now, "Permanent admin key")
+            )
+        conn.commit()
+        conn.close()
+        print(f"   ✅ Admin key registered: {FIXED_KEY[:25]}...")
+    except Exception as e:
+        print(f"   ⚠️  Admin key error: {e}")
 
-    elif args.command == "validate":
-        result = validate_api_key(args.api_key)
-        if result:
-            print(f"✅ Valid key")
-            print(f"   Company : {result['company_name']}")
-            print(f"   Plan    : {result['plan']}")
-            print(f"   Type    : {result['key_type']}")
-        else:
-            print("❌ Invalid or revoked key")
+    return FIXED_KEY
 
-    elif args.command == "bootstrap":
-        key = bootstrap_admin_key()
-        if not key:
-            print("Admin key already exists. Use 'list' to see it.")
 
-    else:
-        parser.print_help()
