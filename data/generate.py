@@ -39,7 +39,6 @@ def weighted_choice(options: list, weights: list):
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 SCHEMA = """
--- Drop and recreate tables to ensure correct schema
 DROP TABLE IF EXISTS ml_predictions CASCADE;
 DROP TABLE IF EXISTS agent_actions CASCADE;
 DROP TABLE IF EXISTS email_log CASCADE;
@@ -72,11 +71,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     customer_id     TEXT,
     amount          REAL,
     currency        TEXT DEFAULT 'USD',
-    txn_type        TEXT,           -- purchase / renewal / upgrade / refund
+    txn_type        TEXT,
     product_id      TEXT,
-    status          TEXT,           -- completed / failed / refunded
+    status          TEXT,
     txn_date        TEXT,
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
     company_id      TEXT DEFAULT 'default'
 );
 
@@ -85,10 +83,9 @@ CREATE TABLE IF NOT EXISTS engagement_events (
     customer_id     TEXT,
     event_type      TEXT,
     channel         TEXT,
-    session_duration INTEGER,       -- seconds
+    session_duration INTEGER,
     event_date      TEXT,
-    metadata        TEXT,           -- JSON blob
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    metadata        TEXT,
     company_id      TEXT DEFAULT 'default'
 );
 
@@ -97,11 +94,10 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     customer_id     TEXT,
     topic           TEXT,
     status          TEXT,
-    priority        TEXT,           -- low / medium / high / critical
-    sentiment_score REAL,           -- -1 to 1 (negative to positive)
+    priority        TEXT,
+    sentiment_score REAL,
     opened_at       TEXT,
     resolved_at     TEXT,
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
     company_id      TEXT DEFAULT 'default'
 );
 
@@ -110,10 +106,9 @@ CREATE TABLE IF NOT EXISTS email_log (
     customer_id     TEXT,
     email_type      TEXT,
     subject         TEXT,
-    opened          INTEGER,
-    clicked         INTEGER,
+    opened          INTEGER DEFAULT 0,
+    clicked         INTEGER DEFAULT 0,
     sent_at         TEXT,
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
     company_id      TEXT DEFAULT 'default'
 );
 
@@ -121,27 +116,33 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     action_id       TEXT PRIMARY KEY,
     customer_id     TEXT,
     action_type     TEXT,
-    reason          TEXT,           -- LLM-generated explanation
-    priority        INTEGER,        -- 1 (low) to 5 (critical)
-    status          TEXT DEFAULT 'pending',  -- pending / executed / skipped
-    outcome         TEXT,
+    priority        INTEGER,
+    reason          TEXT,
+    status          TEXT DEFAULT 'pending_approval',
     created_at      TEXT,
     executed_at     TEXT,
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    decided_by      TEXT,
+    outcome         TEXT,
     company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS ml_predictions (
-    prediction_id   TEXT PRIMARY KEY,
+    pred_id         TEXT PRIMARY KEY,
     customer_id     TEXT,
-    churn_score     REAL,           -- 0–1
-    conversion_score REAL,          -- 0–1
-    segment         TEXT,           -- Champion / Loyal / At-Risk / Lost / Prospect
-    ltv_estimate    REAL,           -- lifetime value estimate ($)
+    churn_score     REAL,
+    conversion_score REAL,
+    segment         TEXT,
     predicted_at    TEXT,
-    FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
     company_id      TEXT DEFAULT 'default'
 );
+
+CREATE INDEX IF NOT EXISTS idx_customers_company ON customers(company_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_company ON transactions(company_id);
+CREATE INDEX IF NOT EXISTS idx_events_company ON engagement_events(company_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_company ON support_tickets(company_id);
+CREATE INDEX IF NOT EXISTS idx_emails_company ON email_log(company_id);
+CREATE INDEX IF NOT EXISTS idx_actions_company ON agent_actions(company_id);
+CREATE INDEX IF NOT EXISTS idx_predictions_company ON ml_predictions(company_id);
 """
 
 # ── Generators ────────────────────────────────────────────────────────────────
