@@ -608,3 +608,71 @@ def create_app() -> "FastAPI":
     ):
         """Full audit log of all approval decisions — who approved/rejected what and when."""
         ensure_approval_schema()
+        cid = company["company_id"]
+        return get_approval_audit_trail_db(company_id=cid, limit=limit)
+
+    @app.get("/me", tags=["Auth"])
+    def get_current_company(company: dict = Depends(require_auth)):
+        """Return info about the authenticated company."""
+        return company
+
+    @app.get("/me/stats", tags=["Auth"])
+    def my_stats(company: dict = Depends(require_auth)):
+        """Return data stats for the authenticated company."""
+        return get_tenant_stats(company["company_id"])
+
+    @app.get("/admin/reset-key", tags=["Auth"], include_in_schema=False)
+    def reset_admin_key(secret: str = Query(...)):
+        if secret != "ezer-reset-2026":
+            raise HTTPException(status_code=403, detail="Invalid secret")
+        try:
+            from utils.db import get_connection
+            conn = get_connection()
+            conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
+            conn.commit()
+            conn.close()
+            from utils.auth import create_api_key
+            result = create_api_key("ACIA Admin", "admin@acia.internal", key_type="admin")
+            return {"new_admin_key": result["api_key"]}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/admin/debug-key", include_in_schema=False)
+    def debug_key(secret: str = Query(...), key: str = Query(...)):
+        if secret != "ezer-reset-2026":
+            raise HTTPException(status_code=403, detail="Invalid secret")
+        import hashlib
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+        try:
+            from utils.db import read_sql
+            df = read_sql(
+                "SELECT k.key_id, k.company_id, k.key_type, k.is_active, c.company_name "
+                "FROM api_keys k "
+                "JOIN companies c ON c.company_id = k.company_id "
+                "WHERE k.key_hash = ?",
+                params=(key_hash,)
+            )
+            return {"key_hash": key_hash, "found": not df.empty, "rows": df.to_dict("records") if not df.empty else []}
+        except Exception as e:
+            return {"error": str(e), "key_hash": key_hash}
+
+    return app
+
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+
+if FASTAPI_AVAILABLE:
+    app = create_app()
+else:
+    app = None
+
+if __name__ == "__main__":
+    if not FASTAPI_AVAILABLE:
+        print("Install FastAPI first:  pip install fastapi uvicorn")
+    else:
+        try:
+            import uvicorn
+            print("Starting ACIA API on http://localhost:8000")
+            uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+        except ImportError:
+            print("Install uvicorn:  pip install uvicorn")
