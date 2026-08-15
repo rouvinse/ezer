@@ -42,19 +42,20 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS customers (
     customer_id     TEXT PRIMARY KEY,
     name            TEXT,
-    email           TEXT UNIQUE,
+    email           TEXT,
     company         TEXT,
     industry        TEXT,
     plan            TEXT,
-    mrr             REAL,           -- monthly recurring revenue ($)
+    mrr             REAL,
     signup_date     TEXT,
     country         TEXT,
     employee_count  INTEGER,
-    health_score    REAL,           -- 0–100, computed
-    nps_score       INTEGER,        -- -100 to 100
-    is_churned      INTEGER,        -- 0/1 label for ML
+    health_score    REAL,
+    nps_score       INTEGER,
+    is_churned      INTEGER,
     churn_date      TEXT,
-    created_at      TEXT
+    created_at      TEXT,
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     status          TEXT,           -- completed / failed / refunded
     txn_date        TEXT,
     FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS engagement_events (
@@ -78,6 +80,7 @@ CREATE TABLE IF NOT EXISTS engagement_events (
     event_date      TEXT,
     metadata        TEXT,           -- JSON blob
     FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS support_tickets (
@@ -90,6 +93,7 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     opened_at       TEXT,
     resolved_at     TEXT,
     FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS email_log (
@@ -101,6 +105,7 @@ CREATE TABLE IF NOT EXISTS email_log (
     clicked         INTEGER,
     sent_at         TEXT,
     FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS agent_actions (
@@ -114,6 +119,7 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     created_at      TEXT,
     executed_at     TEXT,
     FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS ml_predictions (
@@ -125,6 +131,7 @@ CREATE TABLE IF NOT EXISTS ml_predictions (
     ltv_estimate    REAL,           -- lifetime value estimate ($)
     predicted_at    TEXT,
     FOREIGN KEY(customer_id) REFERENCES customers(customer_id)
+    company_id      TEXT DEFAULT 'default'
 );
 """
 
