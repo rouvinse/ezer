@@ -287,16 +287,53 @@ def list_api_keys(company_id: str | None = None) -> list[dict]:
 def bootstrap_admin_key() -> str | None:
     """
     Create the initial admin API key if none exists.
-    Called once on first startup.
-    Prints the key to console — save it immediately.
+    If ACIA_ADMIN_KEY env var is set, uses that as the fixed key.
     """
+    import os, hashlib
     ensure_auth_schema()
 
-    # Check if admin key already exists
+    fixed_key = os.environ.get("ACIA_ADMIN_KEY", "")
+
+    if fixed_key:
+        # Use the fixed key from environment — upsert it
+        key_hash = hashlib.sha256(fixed_key.encode()).hexdigest()
+        try:
+            conn = get_connection()
+            # Check if this exact key already exists
+            df = read_sql("SELECT key_id FROM api_keys WHERE key_hash = %s" if os.environ.get("DB_ENGINE","sqlite") == "postgresql" else "SELECT key_id FROM api_keys WHERE key_hash = ?",
+                         params=(key_hash,))
+            if not df.empty:
+                return None  # Already registered
+
+            # Delete old admin keys and insert the fixed one
+            conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
+            conn.commit()
+
+            # Get or create admin company
+            company_id = get_or_create_company("ACIA Admin", "admin@acia.internal")
+            key_id = str(__import__("uuid").uuid4())
+            now = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            prefix = fixed_key[:20]
+
+            conn.execute(
+                "INSERT INTO api_keys (key_id, company_id, company_name, key_hash, key_prefix, key_type, is_active, created_at, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)" if os.environ.get("DB_ENGINE","sqlite") != "postgresql" else
+                "INSERT INTO api_keys (key_id, company_id, company_name, key_hash, key_prefix, key_type, is_active, created_at, notes) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s)",
+                (key_id, company_id, "ACIA Admin", key_hash, prefix, "admin", now, "Fixed admin key from environment")
+            )
+            conn.commit()
+            conn.close()
+            print(f"   ✅ Admin key registered from environment variable")
+        except Exception as e:
+            print(f"   ⚠️  Admin key setup error: {e}")
+        return fixed_key
+
+    # No fixed key — check if one already exists
     try:
         df = read_sql("SELECT key_id FROM api_keys WHERE key_type = 'admin' AND is_active = 1")
         if not df.empty:
-            return None   # Already exists
+            return None
     except Exception:
         pass
 
@@ -311,10 +348,6 @@ def bootstrap_admin_key() -> str | None:
     print(f"  🔑  ACIA Admin API Key Generated")
     print(f"{'='*56}")
     print(f"  Key : {result['api_key']}")
-    print(f"{'='*56}")
-    print(f"  ⚠️  Save this key now — it will not be shown again.")
-    print(f"  Add it to your .env file:")
-    print(f"  ACIA_ADMIN_KEY={result['api_key']}")
     print(f"{'='*56}\n")
 
     return result["api_key"]
