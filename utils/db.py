@@ -59,6 +59,35 @@ if DATABASE_URL.startswith("postgresql") or DATABASE_URL.startswith("postgres"):
 
 # ── Connection wrappers ────────────────────────────────────────────────────────
 
+class _WrappedCursor:
+    """Wraps psycopg2 cursor to make fetchone() return list-indexable results."""
+    def __init__(self, cur):
+        self._cur = cur
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return list(row.values())
+        return row
+
+    def fetchall(self):
+        rows = self._cur.fetchall()
+        if not rows:
+            return []
+        if rows and isinstance(rows[0], dict):
+            return [list(r.values()) for r in rows]
+        return rows
+
+    @property
+    def description(self):
+        return self._cur.description
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
 class ACIAConnection:
     """
     Unified connection wrapper.
@@ -78,7 +107,7 @@ class ACIAConnection:
             cur.execute(sql)
         else:
             cur.execute(sql, params)
-        return cur
+        return _WrappedCursor(cur)
 
     def executemany(self, sql: str, params_seq):
         """Execute a SQL statement with multiple parameter sets."""
@@ -109,6 +138,37 @@ class ACIAConnection:
                         pass
                     else:
                         raise
+
+    def fetchone(self, sql: str, params=None):
+        """Execute query and return first row as a tuple-compatible object."""
+        sql = self._adapt_sql(sql)
+        cur = self._conn.cursor()
+        if params:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
+        row = cur.fetchone()
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            # Return a list so [0] indexing works
+            return list(row.values())
+        return row
+
+    def fetchone_scalar(self, sql: str, params=None):
+        """Execute query and return first value of first row as scalar."""
+        sql = self._adapt_sql(sql)
+        cur = self._conn.cursor()
+        if params:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
+        row = cur.fetchone()
+        if row is None:
+            return 0
+        if isinstance(row, dict):
+            return list(row.values())[0]
+        return row[0]
 
     def commit(self):
         self._conn.commit()
@@ -217,7 +277,6 @@ def read_sql(query: str, params=None) -> "pd.DataFrame":
     conn = get_connection()
     try:
         adapted = conn._adapt_sql(query)
-        # Use regular cursor (not RealDictCursor) for consistent behavior
         cur = conn._conn.cursor()
         if params:
             cur.execute(adapted, params)
@@ -227,11 +286,9 @@ def read_sql(query: str, params=None) -> "pd.DataFrame":
         if not rows:
             col_names = [d[0] for d in cur.description] if cur.description else []
             return pd.DataFrame(columns=col_names)
-        # RealDictCursor returns dict-like rows — use directly
-        # Regular cursor returns tuples — zip with col_names
+        # Handle RealDictRow (PostgreSQL) and tuple rows (SQLite)
         first = rows[0]
         if hasattr(first, 'keys'):
-            # RealDictRow or dict — already has correct keys/values
             return pd.DataFrame([dict(row) for row in rows])
         else:
             col_names = [d[0] for d in cur.description]

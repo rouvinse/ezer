@@ -383,7 +383,7 @@ def create_app() -> "FastAPI":
                 FROM customers c
                 JOIN ml_predictions p ON p.customer_id = c.customer_id
                 WHERE c.customer_id = ? AND c.company_id = ?
-            """, (customer_id, cid)).fetchone()
+            """, (customer_id, cid)).fetchone()[0]
 
             if not row:
                 raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
@@ -514,7 +514,7 @@ def create_app() -> "FastAPI":
             row = conn.execute(
                 "SELECT * FROM agent_actions WHERE action_id=? AND company_id=?",
                 (action_id, cid)
-            ).fetchone()
+            ).fetchone()[0]
             if not row:
                 raise HTTPException(status_code=404, detail="Action not found")
             return row_to_dict(row)
@@ -707,7 +707,7 @@ def create_app() -> "FastAPI":
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        return approve_all_pending(
+    return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
         )
