@@ -245,14 +245,6 @@ def read_sql(query: str, params=None) -> "pd.DataFrame":
 #   - Added IF NOT EXISTS everywhere
 
 PG_SCHEMA = """
-DROP TABLE IF EXISTS ml_predictions CASCADE;
-DROP TABLE IF EXISTS agent_actions CASCADE;
-DROP TABLE IF EXISTS email_log CASCADE;
-DROP TABLE IF EXISTS support_tickets CASCADE;
-DROP TABLE IF EXISTS engagement_events CASCADE;
-DROP TABLE IF EXISTS transactions CASCADE;
-DROP TABLE IF EXISTS customers CASCADE;
-
 CREATE TABLE IF NOT EXISTS customers (
     customer_id     VARCHAR(36) PRIMARY KEY,
     name            TEXT,

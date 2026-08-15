@@ -39,14 +39,6 @@ def weighted_choice(options: list, weights: list):
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 SCHEMA = """
-DROP TABLE IF EXISTS ml_predictions CASCADE;
-DROP TABLE IF EXISTS agent_actions CASCADE;
-DROP TABLE IF EXISTS email_log CASCADE;
-DROP TABLE IF EXISTS support_tickets CASCADE;
-DROP TABLE IF EXISTS engagement_events CASCADE;
-DROP TABLE IF EXISTS transactions CASCADE;
-DROP TABLE IF EXISTS customers CASCADE;
-
 CREATE TABLE IF NOT EXISTS customers (
     customer_id     TEXT PRIMARY KEY,
     name            TEXT,
@@ -302,6 +294,19 @@ def build_database():
     conn = get_connection()
     conn.executescript(get_schema())
     conn.commit()
+
+    # Add company_id column if missing (migration for existing tables)
+    if DB_ENGINE == "postgresql":
+        tables = ["customers", "transactions", "engagement_events",
+                  "support_tickets", "email_log", "agent_actions", "ml_predictions"]
+        cur = conn._conn.cursor()
+        for table in tables:
+            try:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS company_id TEXT DEFAULT 'default'")
+                conn._conn.commit()
+            except Exception:
+                conn._conn.rollback()
+        print("  ✅ Schema migration complete")
 
     DEFAULT_CID = "default"
     print(f"  Generating {NUM_CUSTOMERS} customers...")
