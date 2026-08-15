@@ -159,6 +159,48 @@ def row_to_dict(row) -> dict:
         return row
     try:
         return dict(row)
+    except Exception:
+        return {}
+
+
+# ── App factory ───────────────────────────────────────────────────────────────
+
+def create_app() -> "FastAPI":
+    app = FastAPI(
+        title="ACIA — Autonomous CRM Intelligence Agent",
+        description=(
+            "AI-powered CRM system that predicts churn and conversion, "
+            "then autonomously executes engagement actions.\n\n"
+            "Built with: Python · SQLite · scikit-learn · Claude API"
+        ),
+        version="1.0.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
+
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ── Authentication setup ──────────────────────────────────────────────────
+    # Ensure auth tables exist and admin key is bootstrapped
+    ensure_auth_schema()
+    bootstrap_admin_key()
+
+    API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+    def require_auth(api_key: str = Security(API_KEY_HEADER)) -> dict:
+        """
+        FastAPI dependency — validates X-API-Key header on every request.
+        Inject into any endpoint with: company=Depends(require_auth)
+        Returns company info dict on success, raises 401 on failure.
+        """
+        if not api_key:
+            raise HTTPException(
                 status_code=401,
                 detail="Missing API key. Include X-API-Key header.",
                 headers={"WWW-Authenticate": "ApiKey"},
@@ -554,117 +596,6 @@ def row_to_dict(row) -> dict:
         Ordered by priority — critical actions first.
         """
         ensure_approval_schema()
-        return {
-            "queue": get_approval_queue(company_id=company["company_id"], limit=limit),
-            "stats": get_approval_stats(company_id=company["company_id"]),
-        }
-
-    @app.get("/approvals/stats", tags=["Approvals"])
-    def get_approval_summary(company: dict = Depends(require_auth)):
-        """Summary counts — pending, approved today, rejected today, trust mode."""
-        ensure_approval_schema()
-        return get_approval_stats(company_id=company["company_id"])
-
-    @app.post("/approvals/{action_id}/approve", tags=["Approvals"])
-    def approve_single_action(
-        action_id: str,
-        req:       ApproveRequest,
-        company:   dict = Depends(require_auth),
-    ):
-        """
-        Approve a single action. Moves it to the execution queue.
-        Optionally provide edited_reason to override the AI-generated text.
-        """
-        ensure_approval_schema()
-        result = approve_action(
-            action_id=action_id,
-            decided_by=req.decided_by,
-            edited_reason=req.edited_reason,
-            company_id=company["company_id"],
-        )
-        if not result["success"]:
-            raise HTTPException(status_code=404, detail=result.get("error", "Action not found"))
-        return result
-
-    @app.post("/approvals/{action_id}/reject", tags=["Approvals"])
-    def reject_single_action(
-        action_id: str,
-        req:       RejectRequest,
-        company:   dict = Depends(require_auth),
-    ):
-        """
-        Reject an action. It will not be executed.
-        Provide a rejection_note to log the reason.
-        """
-        ensure_approval_schema()
-        result = reject_action(
-            action_id=action_id,
-            rejection_note=req.rejection_note,
-            decided_by=req.decided_by,
-            company_id=company["company_id"],
-        )
-        if not result["success"]:
-            raise HTTPException(status_code=404, detail=result.get("error", "Action not found"))
-        return result
-
-    @app.post("/approvals/bulk-approve", tags=["Approvals"])
-    def bulk_approve_actions(
-        req:     BulkApproveRequest,
-        company: dict = Depends(require_auth),
-    ):
-        """Approve multiple actions in one call."""
-        ensure_approval_schema()
-        return bulk_approve(
-            action_ids=req.action_ids,
-            decided_by=req.decided_by,
-            company_id=company["company_id"],
-        )
-
-    @app.post("/approvals/approve-all", tags=["Approvals"])
-    def approve_all_actions(
-        decided_by: str  = Query("human"),
-        company:    dict = Depends(require_auth),
-    ):
-        """Approve every pending_approval action for this company at once."""
-        ensure_approval_schema()
-
-        # ── Temporary admin key reset (remove after use) ──────────────────────────
-    @app.get("/admin/debug-key", include_in_schema=False)
-    def debug_key(secret: str = Query(...), key: str = Query(...)):
-        if secret != "ezer-reset-2026":
-            raise HTTPException(status_code=403, detail="Invalid secret")
-        import hashlib
-        key_hash = hashlib.sha256(key.encode()).hexdigest()
-        try:
-            from utils.db import read_sql
-            df = read_sql(
-                "SELECT k.key_id, k.company_id, k.key_type, k.is_active, c.company_name "
-                "FROM api_keys k "
-                "JOIN companies c ON c.company_id = k.company_id "
-                "WHERE k.key_hash = ?",
-                params=(key_hash,)
-            )
-            return {"key_hash": key_hash, "found": not df.empty, "rows": df.to_dict("records") if not df.empty else []}
-        except Exception as e:
-            return {"error": str(e), "key_hash": key_hash}
-
-    @app.get("/admin/reset-key", tags=["Auth"], include_in_schema=False)
-    def reset_admin_key(secret: str = Query(...)):
-        """One-time endpoint to reset admin key. Remove after use."""
-        if secret != "ezer-reset-2026":
-            raise HTTPException(status_code=403, detail="Invalid secret")
-        try:
-            from utils.db import get_connection
-            conn = get_connection()
-            conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
-            conn.commit()
-            conn.close()
-            from utils.auth import create_api_key
-            result = create_api_key("ACIA Admin", "admin@acia.internal", key_type="admin")
-            return {"new_admin_key": result["api_key"], "message": "Save this key — it won't be shown again"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
         return approve_all_pending(
             company_id=company["company_id"],
             decided_by=decided_by,
@@ -677,94 +608,3 @@ def row_to_dict(row) -> dict:
     ):
         """Full audit log of all approval decisions — who approved/rejected what and when."""
         ensure_approval_schema()
-        return {"history": get_approval_history(company_id=company["company_id"], limit=limit)}
-
-    @app.get("/approvals/trust-mode", tags=["Approvals"])
-    def get_company_trust_mode(company: dict = Depends(require_auth)):
-        """Get the current trust mode for this company."""
-        return {
-            "company_id": company["company_id"],
-            "trust_mode": get_trust_mode(company["company_id"]),
-            "modes": {
-                TRUST_MODE_FULL:      "All actions require human approval",
-                TRUST_MODE_HIGH_RISK: "Only P4/P5 (High/Critical) actions require approval",
-                TRUST_MODE_AUTO:      "All actions execute autonomously — no approval needed",
-            }
-        }
-
-    @app.put("/approvals/trust-mode", tags=["Approvals"])
-    def update_trust_mode(
-        req:     TrustModeRequest,
-        company: dict = Depends(require_auth),
-    ):
-        """
-        Update the trust mode for this company.
-        Start with full_review, graduate to autonomous as trust builds.
-        """
-        ensure_approval_schema()
-        set_trust_mode(
-            trust_mode=req.trust_mode,
-            company_id=company["company_id"],
-            updated_by=req.updated_by,
-        )
-        return {
-            "company_id": company["company_id"],
-            "trust_mode": req.trust_mode,
-            "message":    f"Trust mode updated to '{req.trust_mode}'",
-        }
-
-    # ── Tenant management endpoints ───────────────────────────────────────────
-
-    @app.get("/tenants", tags=["Tenants"])
-    def list_all_tenants(_admin: dict = Depends(require_admin)):
-        """List all tenants with customer counts. Admin only."""
-        return {"tenants": list_tenants()}
-
-    @app.get("/tenants/{company_id}/stats", tags=["Tenants"])
-    def get_tenant_statistics(company_id: str, _admin: dict = Depends(require_admin)):
-        """Row counts per table for a specific tenant. Admin only."""
-        return get_tenant_stats(company_id)
-
-    @app.post("/tenants/{company_id}/provision", tags=["Tenants"])
-    def provision_tenant_data(
-        company_id:    str,
-        company_name:  str,
-        num_customers: int  = 100,
-        _admin: dict        = Depends(require_admin),
-    ):
-        """
-        Provision a new tenant with synthetic data.
-        Use this to onboard demo/pilot customers before
-        their real data connector is ready.
-        """
-        summary = provision_tenant(company_id, company_name, num_customers)
-        return summary
-
-    @app.get("/me/stats", tags=["Auth"])
-    def my_stats(company: dict = Depends(require_auth)):
-        """Return data stats for the authenticated company."""
-        return get_tenant_stats(company["company_id"])
-
-
-
-    return app
-
-
-# ── Entrypoint ────────────────────────────────────────────────────────────────
-
-if FASTAPI_AVAILABLE:
-    app = create_app()
-else:
-    app = None
-
-if __name__ == "__main__":
-    if not FASTAPI_AVAILABLE:
-        print("Install FastAPI first:  pip install fastapi uvicorn")
-    else:
-        try:
-            import uvicorn
-            print("Starting ACIA API on http://localhost:8000")
-            print("Interactive docs: http://localhost:8000/docs")
-            uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
-        except ImportError:
-            print("Install uvicorn:  pip install uvicorn")
