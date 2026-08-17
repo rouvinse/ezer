@@ -35,8 +35,8 @@ def _build_conversion_label(df: pd.DataFrame) -> pd.Series:
     return (df["plan_rank"] >= 2).astype(int)
 
 
-def train_conversion_model(verbose: bool = True) -> dict:
-    df = build_customer_features()
+def train_conversion_model(verbose: bool = True, company_id: str | None = None) -> dict:
+    df = build_customer_features(company_id=company_id)
 
     # Only score non-Enterprise (they've already maxed out)
     df_target = df[df["plan_rank"] < 3].copy()

@@ -31,9 +31,14 @@ CHURN_MODEL_PATH = MODEL_DIR / "churn_model.pkl"
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
-def train_churn_model(verbose: bool = True) -> dict:
-    df = build_customer_features()
+def train_churn_model(verbose: bool = True, company_id: str | None = None) -> dict:
+    df = build_customer_features(company_id=company_id)
     feat_cols = get_all_feature_cols()
+
+    # Ensure all feature columns exist
+    missing = [c for c in feat_cols if c not in df.columns]
+    for col in missing:
+        df[col] = 0.0
 
     X = df[feat_cols].values
     y = df["is_churned"].values
