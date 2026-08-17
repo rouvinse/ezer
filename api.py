@@ -570,7 +570,7 @@ def create_app() -> "FastAPI":
         result = {}
         cid = company.get("company_id", "default")
         if req.retrain_models:
-            arts = train_all(verbose=False)
+            arts = train_all(verbose=False, company_id=cid)
             result["models_trained"] = list(arts.keys())
         if req.run_inference:
             preds = run_inference_and_store(company_id=cid, verbose=False)

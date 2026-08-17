@@ -211,6 +211,8 @@ def build_customer_features(company_id: str | None = None) -> pd.DataFrame:
         "ticket_count": 0, "open_tickets": 0, "critical_tickets": 0,
         "avg_sentiment": 0, "cancellation_risk": 0, "unresolved_rate": 0,
         "open_rate": 0, "click_rate": 0,
+        "is_churned": 0, "mrr": 0, "health_score": 60, "nps_score": 50,
+        "employee_count": 0, "tenure_days": 0, "plan_rank": 1,
     }
     df = _ensure_columns(df, expected)
 
