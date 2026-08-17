@@ -40,6 +40,15 @@ def train_churn_model(verbose: bool = True, company_id: str | None = None) -> di
     for col in missing:
         df[col] = 0.0
 
+    # Debug: print available columns
+    print(f"  DataFrame shape: {df.shape}")
+    print(f"  Columns: {list(df.columns)}")
+    print(f"  is_churned present: {'is_churned' in df.columns}")
+
+    # Ensure is_churned exists
+    if "is_churned" not in df.columns:
+        df["is_churned"] = 0
+
     X = df[feat_cols].values
     y = df["is_churned"].values
 
