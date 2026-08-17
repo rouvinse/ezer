@@ -52,7 +52,7 @@ def _build_rfm(df: pd.DataFrame) -> pd.DataFrame:
     return rfm
 
 
-def train_segmentation_model(verbose: bool = True) -> dict:
+def train_segmentation_model(verbose: bool = True, company_id: str | None = None) -> dict:
     df  = build_customer_features()
     rfm = _build_rfm(df)
 
@@ -132,7 +132,7 @@ def predict_segments(df: pd.DataFrame | None = None) -> pd.DataFrame:
     c2s        = artifact["cluster_to_segment"]
 
     if df is None:
-        df = build_customer_features()
+        df = build_customer_features(company_id=company_id)
 
     rfm = _build_rfm(df)
     X   = scaler.transform(rfm[feat_cols].values)
