@@ -564,17 +564,21 @@ def create_app() -> "FastAPI":
         return AgentCycleResult(**summary)
 
     @app.post("/agent/train", tags=["Agent"])
-    def train_models(req: TrainRequest, company: dict = Depends(require_admin)):
+    def train_models(
+        req:         TrainRequest,
+        company_id:  str = Query("tester-001", description="Company ID to train on"),
+        _admin:      dict = Depends(require_admin),
+    ):
         """Retrain ML models and/or re-run inference on all customers."""
         from models.orchestrator import train_all, run_inference_and_store
         result = {}
-        cid = company.get("company_id", "default")
         if req.retrain_models:
-            arts = train_all(verbose=False, company_id=cid)
+            arts = train_all(verbose=False, company_id=company_id)
             result["models_trained"] = list(arts.keys())
         if req.run_inference:
-            preds = run_inference_and_store(company_id=cid, verbose=False)
+            preds = run_inference_and_store(company_id=company_id, verbose=False)
             result["customers_scored"] = len(preds)
+        result["company_id"] = company_id
         result["timestamp"] = datetime.now().isoformat()
         return result
 
