@@ -568,11 +568,12 @@ def create_app() -> "FastAPI":
         """Retrain ML models and/or re-run inference on all customers."""
         from models.orchestrator import train_all, run_inference_and_store
         result = {}
+        cid = company.get("company_id", "default")
         if req.retrain_models:
             arts = train_all(verbose=False)
             result["models_trained"] = list(arts.keys())
         if req.run_inference:
-            preds = run_inference_and_store(verbose=False)
+            preds = run_inference_and_store(company_id=cid, verbose=False)
             result["customers_scored"] = len(preds)
         result["timestamp"] = datetime.now().isoformat()
         return result
