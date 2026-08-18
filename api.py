@@ -153,14 +153,27 @@ def get_db():
     return get_connection()
 
 def row_to_dict(row) -> dict:
+    """Convert a DB row to dict. Handles RealDictRow, tuple, list, and dict."""
     if row is None:
         return {}
     if isinstance(row, dict):
-        return row
+        return dict(row)
     try:
         return dict(row)
     except Exception:
         return {}
+
+def rows_to_dicts(rows, col_names: list) -> list:
+    """Convert list of rows (tuples/lists) to list of dicts using column names."""
+    result = []
+    for row in rows:
+        if isinstance(row, dict):
+            result.append(dict(row))
+        elif isinstance(row, (list, tuple)):
+            result.append(dict(zip(col_names, row)))
+        else:
+            result.append({})
+    return result
 
 
 # ── App factory ───────────────────────────────────────────────────────────────
@@ -303,7 +316,7 @@ def create_app() -> "FastAPI":
             active   = conn.execute("SELECT COUNT(*) FROM customers WHERE is_churned=0 AND company_id=?", (cid,)).fetchone()[0]
             churned  = total - active
             mrr      = conn.execute("SELECT COALESCE(SUM(mrr),0) FROM customers WHERE is_churned=0 AND company_id=?", (cid,)).fetchone()[0]
-            ltv      = conn.execute("SELECT COALESCE(SUM(ltv_estimate),0) FROM ml_predictions WHERE company_id=?", (cid,)).fetchone()[0]
+            ltv      = 0  # ltv_estimate not yet implemented
             hi_risk  = conn.execute("SELECT COUNT(*) FROM ml_predictions WHERE churn_score>=0.6 AND company_id=?", (cid,)).fetchone()[0]
             hot_conv = conn.execute("SELECT COUNT(*) FROM ml_predictions WHERE conversion_score>=0.7 AND company_id=?", (cid,)).fetchone()[0]
             executed = conn.execute("SELECT COUNT(*) FROM agent_actions WHERE status='executed' AND company_id=?", (cid,)).fetchone()[0]
@@ -418,20 +431,17 @@ def create_app() -> "FastAPI":
         company:   dict  = Depends(require_auth),
     ):
         """Customers ranked by churn score — highest risk first."""
-        conn = get_db()
-        try:
-            cid  = company["company_id"]
-            rows = conn.execute("""
-                SELECT c.customer_id, c.name, c.plan, c.mrr,
-                       p.churn_score, p.segment, p.ltv_estimate
-                FROM ml_predictions p
-                JOIN customers c ON c.customer_id = p.customer_id
-                WHERE p.churn_score >= ? AND c.is_churned = 0 AND p.company_id = ?
-                ORDER BY p.churn_score DESC LIMIT ?
-            """, (min_score, cid, limit)).fetchall()
-            return {"predictions": [row_to_dict(r) for r in rows], "count": len(rows)}
-        finally:
-            conn.close()
+        cid = company["company_id"]
+        df = read_sql("""
+            SELECT c.customer_id, c.name, c.plan, c.mrr,
+                   p.churn_score, p.segment
+            FROM ml_predictions p
+            JOIN customers c ON c.customer_id = p.customer_id
+            WHERE p.churn_score >= ? AND c.is_churned = 0 AND p.company_id = ?
+            ORDER BY p.churn_score DESC LIMIT ?
+        """, params=(min_score, cid, limit))
+        predictions = df.to_dict("records") if not df.empty else []
+        return {"predictions": predictions, "count": len(predictions)}
 
     @app.get("/predictions/conversion", tags=["Predictions"])
     def get_conversion_predictions(
@@ -440,244 +450,35 @@ def create_app() -> "FastAPI":
         company:   dict  = Depends(require_auth),
     ):
         """Customers ranked by conversion probability — hottest leads first."""
-        conn = get_db()
-        try:
-            cid  = company["company_id"]
-            rows = conn.execute("""
-                SELECT c.customer_id, c.name, c.plan, c.mrr,
-                       p.conversion_score, p.segment
-                FROM ml_predictions p
-                JOIN customers c ON c.customer_id = p.customer_id
-                WHERE p.conversion_score >= ? AND c.plan != 'Enterprise' AND p.company_id = ?
-                ORDER BY p.conversion_score DESC LIMIT ?
-            """, (min_score, cid, limit)).fetchall()
-            return {"predictions": [row_to_dict(r) for r in rows], "count": len(rows)}
-        finally:
-            conn.close()
+        cid = company["company_id"]
+        df = read_sql("""
+            SELECT c.customer_id, c.name, c.plan, c.mrr,
+                   p.conversion_score, p.segment
+            FROM ml_predictions p
+            JOIN customers c ON c.customer_id = p.customer_id
+            WHERE p.conversion_score >= ? AND c.is_churned = 0 AND p.company_id = ?
+            ORDER BY p.conversion_score DESC LIMIT ?
+        """, params=(min_score, cid, limit))
+        predictions = df.to_dict("records") if not df.empty else []
+        return {"predictions": predictions, "count": len(predictions)}
 
     @app.get("/predictions/segments", tags=["Predictions"])
-    def get_segment_distribution(company: dict = Depends(require_auth)):
-        """Customer count and average metrics per segment."""
-        conn = get_db()
-        try:
-            cid  = company["company_id"]
-            rows = conn.execute("""
-                SELECT p.segment,
-                       COUNT(*) as customer_count,
-                       ROUND(AVG(p.churn_score), 3) as avg_churn_score,
-                       ROUND(AVG(p.conversion_score), 3) as avg_conversion_score,
-                       ROUND(AVG(c.mrr), 2) as avg_mrr,
-                       ROUND(SUM(p.ltv_estimate), 2) as total_ltv
-                FROM ml_predictions p
-                JOIN customers c ON c.customer_id = p.customer_id
-                WHERE p.company_id = ?
-                GROUP BY p.segment
-                ORDER BY avg_churn_score DESC
-            """, (cid,)).fetchall()
-            return {"segments": [row_to_dict(r) for r in rows]}
-        finally:
-            conn.close()
-
-    # ── Actions ───────────────────────────────────────────────────────────────
-
-    @app.get("/actions/queue", tags=["Actions"])
-    def get_action_queue(
-        status:   str = Query("pending", description="pending | executed | skipped"),
-        priority: Optional[int] = Query(None, description="Filter by priority 1–5"),
-        limit:    int = Query(50, le=500),
-        company:  dict = Depends(require_auth),
-    ):
-        """Fetch the action queue filtered by status and priority."""
-        conn = get_db()
-        try:
-            cid    = company["company_id"]
-            where  = ["status = ?", "company_id = ?"]
-            params: list = [status, cid]
-            if priority:
-                where.append("priority = ?")
-                params.append(priority)
-            rows = conn.execute(
-                f"SELECT * FROM agent_actions WHERE {' AND '.join(where)} "
-                f"ORDER BY priority DESC, created_at ASC LIMIT ?",
-                params + [limit]
-            ).fetchall()
-            return {"actions": [row_to_dict(r) for r in rows], "count": len(rows), "status": status}
-        finally:
-            conn.close()
-
-    @app.get("/actions/{action_id}", tags=["Actions"])
-    def get_action(action_id: str, company: dict = Depends(require_auth)):
-        """Get a single action by ID."""
-        conn = get_db()
-        try:
-            cid = company["company_id"]
-            row = conn.execute(
-                "SELECT * FROM agent_actions WHERE action_id=? AND company_id=?",
-                (action_id, cid)
-            ).fetchone()[0]
-            if not row:
-                raise HTTPException(status_code=404, detail="Action not found")
-            return row_to_dict(row)
-        finally:
-            conn.close()
-
-    @app.post("/actions/execute", tags=["Actions"])
-    def execute_actions(req: ExecuteRequest, background_tasks: BackgroundTasks, company: dict = Depends(require_auth)):
-        """
-        Execute pending actions from the queue.
-        Returns execution results immediately (synchronous).
-        """
-        from actions.executor import execute_batch, print_execution_report
-        from utils.tenancy import set_tenant
-        set_tenant(company["company_id"], company["company_name"])
-        results = execute_batch(limit=req.limit, dry_run=req.dry_run, verbose=False)
-        summary = {
-            "executed":  len(results),
-            "success":   sum(1 for r in results if r.status == "success"),
-            "failure":   sum(1 for r in results if r.status == "failure"),
-            "neutral":   sum(1 for r in results if r.status == "neutral"),
-            "dry_run":   req.dry_run,
-            "timestamp": datetime.now().isoformat(),
-        }
-        return summary
-
-    # ── Agent ─────────────────────────────────────────────────────────────────
-
-    @app.post("/agent/run", response_model=AgentCycleResult, tags=["Agent"])
-    def run_agent(
-        use_llm:    bool = Query(False, description="Use Claude API for LLM planning"),
-        llm_budget: int  = Query(20,    description="Max LLM calls per cycle"),
-        dry_run:    bool = Query(True,  description="Preview actions without queuing them"),
-        company:    dict = Depends(require_auth),
-    ):
-        """
-        Trigger a full agent decision cycle:
-        Rules → LLM Planner → Scheduler → DB queue.
-        Set dry_run=true to preview actions without queuing (safe for demos).
-        Set dry_run=false to actually queue actions.
-        """
-        from agent.runner import run_agent_cycle
-        cid     = company["company_id"]
-        summary = run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget, company_id=cid, verbose=False, dry_run=dry_run)
-        if dry_run:
-            summary["note"] = "dry_run=true — actions previewed but not queued"
-        return AgentCycleResult(**summary)
-
-    @app.post("/agent/train", tags=["Agent"])
-    def train_models(
-        req:         TrainRequest,
-        company_id:  str = Query("tester-001", description="Company ID to train on"),
-        _admin:      dict = Depends(require_admin),
-    ):
-        """Retrain ML models and/or re-run inference on all customers."""
-        from models.orchestrator import train_all, run_inference_and_store
-        result = {}
-        if req.retrain_models:
-            arts = train_all(verbose=False, company_id=company_id)
-            result["models_trained"] = list(arts.keys())
-        if req.run_inference:
-            preds = run_inference_and_store(company_id=company_id, verbose=False)
-            result["customers_scored"] = len(preds)
-        result["company_id"] = company_id
-        result["timestamp"] = datetime.now().isoformat()
-        return result
-
-    @app.post("/agent/feedback", tags=["Agent"])
-    def apply_feedback_endpoint(lookback_hours: int = Query(24), company: dict = Depends(require_auth)):
-        """Process recent outcomes and update health scores (feedback loop)."""
-        from actions.feedback import apply_feedback
-        summary = apply_feedback(lookback_hours=lookback_hours, company_id=company["company_id"], verbose=False)
-        return summary
-
-    # ── Approval queue endpoints ──────────────────────────────────────────────
-
-    @app.get("/approvals/queue", tags=["Approvals"])
-    def get_pending_approvals(
-        limit:   int  = Query(100, le=500),
+    def get_segments(
         company: dict = Depends(require_auth),
     ):
-        """
-        Fetch all actions waiting for human review.
-        Ordered by priority — critical actions first.
-        """
-        ensure_approval_schema()
-        return approve_all_pending(
-            company_id=company["company_id"],
-            decided_by=decided_by,
-        )
-
-    @app.get("/approvals/history", tags=["Approvals"])
-    def get_approval_audit_trail(
-        limit:   int  = Query(50, le=500),
-        company: dict = Depends(require_auth),
-    ):
-        """Full audit log of all approval decisions — who approved/rejected what and when."""
-        ensure_approval_schema()
+        """Customer segmentation breakdown."""
         cid = company["company_id"]
-        return get_approval_audit_trail_db(company_id=cid, limit=limit)
-
-    @app.get("/me", tags=["Auth"])
-    def get_current_company(company: dict = Depends(require_auth)):
-        """Return info about the authenticated company."""
-        return company
-
-    @app.get("/me/stats", tags=["Auth"])
-    def my_stats(company: dict = Depends(require_auth)):
-        """Return data stats for the authenticated company."""
-        return get_tenant_stats(company["company_id"])
-
-    @app.get("/admin/reset-key", tags=["Auth"], include_in_schema=False)
-    def reset_admin_key(secret: str = Query(...)):
-        if secret != "ezer-reset-2026":
-            raise HTTPException(status_code=403, detail="Invalid secret")
-        try:
-            from utils.db import get_connection
-            conn = get_connection()
-            conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
-            conn.commit()
-            conn.close()
-            from utils.auth import create_api_key
-            result = create_api_key("ACIA Admin", "admin@acia.internal", key_type="admin")
-            return {"new_admin_key": result["api_key"]}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @app.get("/admin/debug-key", include_in_schema=False)
-    def debug_key(secret: str = Query(...), key: str = Query(...)):
-        if secret != "ezer-reset-2026":
-            raise HTTPException(status_code=403, detail="Invalid secret")
-        import hashlib
-        key_hash = hashlib.sha256(key.encode()).hexdigest()
-        try:
-            from utils.db import read_sql
-            df = read_sql(
-                "SELECT k.key_id, k.company_id, k.key_type, k.is_active, c.company_name "
-                "FROM api_keys k "
-                "JOIN companies c ON c.company_id = k.company_id "
-                "WHERE k.key_hash = ?",
-                params=(key_hash,)
-            )
-            return {"key_hash": key_hash, "found": not df.empty, "rows": df.to_dict("records") if not df.empty else []}
-        except Exception as e:
-            return {"error": str(e), "key_hash": key_hash}
-
-    return app
+        df = read_sql("""
+            SELECT p.segment, COUNT(*) as count,
+                   AVG(c.mrr) as avg_mrr,
+                   AVG(p.churn_score) as avg_churn_score
+            FROM ml_predictions p
+            JOIN customers c ON c.customer_id = p.customer_id
+            WHERE p.company_id = ?
+            GROUP BY p.segment
+            ORDER BY count DESC
+        """, params=(cid,))
+        segments = df.to_dict("records") if not df.empty else []
+        return {"segments": segments}
 
 
-# ── Entrypoint ────────────────────────────────────────────────────────────────
-
-if FASTAPI_AVAILABLE:
-    app = create_app()
-else:
-    app = None
-
-if __name__ == "__main__":
-    if not FASTAPI_AVAILABLE:
-        print("Install FastAPI first:  pip install fastapi uvicorn")
-    else:
-        try:
-            import uvicorn
-            print("Starting ACIA API on http://localhost:8000")
-            uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
-        except ImportError:
-            print("Install uvicorn:  pip install uvicorn")
