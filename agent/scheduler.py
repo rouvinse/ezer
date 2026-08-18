@@ -62,7 +62,7 @@ def _score_action(plan: PlannedAction, ltv: float) -> float:
     Composite urgency score for queue ordering.
     Higher = execute sooner.
     """
-    ltv_factor = min(ltv / 2000, 1.0)   # normalise LTV up to $2k
+    ltv_factor = min((ltv or 0) / 2000, 1.0)   # normalise LTV up to $2k
     return (
         plan.priority      * 3.0 +
         plan.confidence    * 1.5 +
