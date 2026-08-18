@@ -346,83 +346,39 @@ def create_app() -> "FastAPI":
 
     # ── Customers ─────────────────────────────────────────────────────────────
 
-    @app.get("/customers", tags=["Customers"])
-    def list_customers(
-        plan:      Optional[str] = Query(None, description="Filter by plan: Free/Starter/Pro/Enterprise"),
-        segment:   Optional[str] = Query(None, description="Filter by segment: Champion/Loyal/At-Risk/Prospect/Lost"),
-        min_churn: float         = Query(0.0,  description="Minimum churn score (0–1)"),
-        max_churn: float         = Query(1.0,  description="Maximum churn score (0–1)"),
-        limit:     int           = Query(50,   le=500),
-        offset:    int           = Query(0),
-        company:   dict          = Depends(require_auth),
+    @app.post("/agent/run", tags=["Agent"])
+    def run_agent(
+        use_llm:    bool = Query(False, description="Use Claude API for LLM planning"),
+        llm_budget: int  = Query(20,    description="Max LLM calls per cycle"),
+        dry_run:    bool = Query(True,  description="Preview actions without queuing"),
+        company:    dict = Depends(require_auth),
     ):
-        """List customers with ML predictions. Supports filtering and pagination."""
-        conn = get_db()
-        try:
-            cid    = company["company_id"]
-            where  = ["c.is_churned = 0", "p.churn_score >= ?", "p.churn_score <= ?", "c.company_id = ?"]
-            params: list = [min_churn, max_churn, cid]
+        """Trigger a full agent decision cycle."""
+        from agent.runner import run_agent_cycle
+        cid     = company["company_id"]
+        summary = run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget, company_id=cid, verbose=False, dry_run=dry_run)
+        if dry_run:
+            summary["note"] = "dry_run=true — actions previewed but not queued"
+        return summary
 
-            if plan:
-                where.append("c.plan = ?")
-                params.append(plan)
-            if segment:
-                where.append("p.segment = ?")
-                params.append(segment)
-
-            sql = f"""
-                SELECT c.customer_id, c.name, c.plan, c.mrr, c.health_score,
-                       p.churn_score, p.conversion_score, p.segment, p.ltv_estimate
-                FROM customers c
-                JOIN ml_predictions p ON p.customer_id = c.customer_id
-                WHERE {' AND '.join(where)}
-                ORDER BY p.churn_score DESC
-                LIMIT ? OFFSET ?
-            """
-            rows = conn.execute(sql, params + [limit, offset]).fetchall()
-            return {"customers": [row_to_dict(r) for r in rows], "count": len(rows), "offset": offset}
-        finally:
-            conn.close()
-
-    @app.get("/customers/{customer_id}/risk", response_model=CustomerRisk, tags=["Customers"])
-    def get_customer_risk(customer_id: str, company: dict = Depends(require_auth)):
-        """Full risk profile for a single customer."""
-        conn = get_db()
-        try:
-            cid = company["company_id"]
-            row = conn.execute("""
-                SELECT c.customer_id, c.name, c.plan, c.mrr, c.health_score,
-                       p.churn_score, p.conversion_score, p.segment, p.ltv_estimate, p.predicted_at
-                FROM customers c
-                JOIN ml_predictions p ON p.customer_id = c.customer_id
-                WHERE c.customer_id = ? AND c.company_id = ?
-            """, (customer_id, cid)).fetchone()[0]
-
-            if not row:
-                raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
-
-            d = row_to_dict(row)
-            d["churn_risk"]      = "High" if d["churn_score"] >= 0.6 else "Medium" if d["churn_score"] >= 0.3 else "Low"
-            d["conversion_tier"] = "Hot"  if d["conversion_score"] >= 0.7 else "Warm" if d["conversion_score"] >= 0.4 else "Cold"
-            return CustomerRisk(**d)
-        finally:
-            conn.close()
-
-    @app.get("/customers/{customer_id}/actions", tags=["Customers"])
-    def get_customer_actions(customer_id: str, company: dict = Depends(require_auth)):
-        """All actions (past + pending) for a specific customer."""
-        conn = get_db()
-        try:
-            cid  = company["company_id"]
-            rows = conn.execute(
-                "SELECT * FROM agent_actions WHERE customer_id=? AND company_id=? ORDER BY created_at DESC",
-                (customer_id, cid)
-            ).fetchall()
-            return {"customer_id": customer_id, "actions": [row_to_dict(r) for r in rows]}
-        finally:
-            conn.close()
-
-    # ── Predictions ───────────────────────────────────────────────────────────
+    @app.post("/agent/train", tags=["Agent"])
+    def train_models(
+        req:         TrainRequest,
+        company_id:  str  = Query("tester-001", description="Company ID to train on"),
+        _admin:      dict = Depends(require_admin),
+    ):
+        """Retrain ML models and/or re-run inference on all customers."""
+        from models.orchestrator import train_all, run_inference_and_store
+        result = {}
+        if req.retrain_models:
+            arts = train_all(verbose=False, company_id=company_id)
+            result["models_trained"] = list(arts.keys())
+        if req.run_inference:
+            preds = run_inference_and_store(company_id=company_id, verbose=False)
+            result["customers_scored"] = len(preds)
+        result["company_id"] = company_id
+        result["timestamp"] = datetime.now().isoformat()
+        return result
 
     @app.get("/predictions/churn", tags=["Predictions"])
     def get_churn_predictions(
