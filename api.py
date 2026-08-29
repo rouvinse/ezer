@@ -320,7 +320,7 @@ def create_app() -> "FastAPI":
             hi_risk  = conn.execute("SELECT COUNT(*) FROM ml_predictions WHERE churn_score>=0.6 AND company_id=?", (cid,)).fetchone()[0]
             hot_conv = conn.execute("SELECT COUNT(*) FROM ml_predictions WHERE conversion_score>=0.7 AND company_id=?", (cid,)).fetchone()[0]
             executed = conn.execute("SELECT COUNT(*) FROM agent_actions WHERE status='executed' AND company_id=?", (cid,)).fetchone()[0]
-            pending  = conn.execute("SELECT COUNT(*) FROM agent_actions WHERE status='pending' AND company_id=?", (cid,)).fetchone()[0]
+            pending  = conn.execute("SELECT COUNT(*) FROM agent_actions WHERE status='pending_approval' AND company_id=?", (cid,)).fetchone()[0]
 
             seg_rows = conn.execute(
                 "SELECT segment, COUNT(*) as n FROM ml_predictions WHERE company_id=? GROUP BY segment", (cid,)
