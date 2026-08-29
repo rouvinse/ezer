@@ -325,7 +325,12 @@ def create_app() -> "FastAPI":
             seg_rows = conn.execute(
                 "SELECT segment, COUNT(*) as n FROM ml_predictions WHERE company_id=? GROUP BY segment", (cid,)
             ).fetchall()
-            segments = {r["segment"]: r["n"] for r in seg_rows}
+            segments = {}
+            for r in seg_rows:
+                if isinstance(r, dict):
+                    segments[r.get("segment","Unknown")] = r.get("n", 0)
+                elif isinstance(r, (list, tuple)) and len(r) >= 2:
+                    segments[r[0]] = r[1]
 
             return DashboardSummary(
                 total_customers=total,
