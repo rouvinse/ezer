@@ -34,6 +34,11 @@ from actions.approval import (
     set_trust_mode, get_trust_mode, ensure_approval_schema,
     TRUST_MODE_FULL, TRUST_MODE_HIGH_RISK, TRUST_MODE_AUTO
 )
+# Stripe connector
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+
 from utils.auth import (
     validate_api_key, create_api_key, revoke_api_key,
     list_api_keys, bootstrap_admin_key, ensure_auth_schema
@@ -550,6 +555,78 @@ def create_app() -> "FastAPI":
     def my_stats(company: dict = Depends(require_auth)):
         """Return data stats for the authenticated company."""
         return get_tenant_stats(company["company_id"])
+
+    # ── STRIPE CONNECTOR ──────────────────────────────────────────────────────
+    @app.post("/connectors/stripe/connect", tags=["Connectors"])
+    def stripe_connect(
+        stripe_key: str = Query(..., description="Your Stripe Secret Key (sk_test_... or sk_live_...)"),
+        company:    dict = Depends(require_auth),
+    ):
+        """
+        Connect your Stripe account to EZER.
+        Pulls all customers and transactions. Takes 30-60 seconds.
+        """
+        if not stripe_key.startswith(("sk_live_", "sk_test_")):
+            raise HTTPException(status_code=400, detail="Invalid Stripe key. Must start with sk_live_ or sk_test_")
+        try:
+            import stripe as stripe_lib
+            stripe_lib.api_key = stripe_key
+            # Test connection first
+            account = stripe_lib.Account.retrieve()
+            account_name = account.get("business_profile", {}).get("name") or account.get("email", "Unknown")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Stripe connection failed: {str(e)}")
+
+        # Run sync with user-provided key
+        try:
+            import os
+            os.environ["STRIPE_SECRET_KEY"] = stripe_key
+            from connectors.stripe_connector import sync_stripe
+            summary = sync_stripe(
+                company_id=company["company_id"],
+                fetch_invoices=True,
+                verbose=False,
+            )
+            summary["account_name"] = account_name
+            summary["mode"] = "live" if "live" in stripe_key else "test"
+            return summary
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/connectors/stripe/test", tags=["Connectors"])
+    def stripe_test_key(
+        stripe_key: str = Query(..., description="Your Stripe Secret Key"),
+        company:    dict = Depends(require_auth),
+    ):
+        """Test if a Stripe key is valid before syncing."""
+        if not stripe_key.startswith(("sk_live_", "sk_test_")):
+            raise HTTPException(status_code=400, detail="Invalid Stripe key format")
+        try:
+            import stripe as stripe_lib
+            stripe_lib.api_key = stripe_key
+            account = stripe_lib.Account.retrieve()
+            return {
+                "valid": True,
+                "account_name": account.get("business_profile", {}).get("name") or account.get("email"),
+                "country": account.get("country"),
+                "mode": "live" if "live" in stripe_key else "test",
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid key: {str(e)}")
+
+    @app.get("/connectors/stripe/status", tags=["Connectors"])
+    def stripe_status(company: dict = Depends(require_auth)):
+        """Show current Stripe sync status."""
+        cid = company["company_id"]
+        conn = get_connection()
+        result = {
+            "customers":    conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=?", (cid,)).fetchone()[0],
+            "active":       conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=? AND is_churned=0", (cid,)).fetchone()[0],
+            "transactions": conn.execute("SELECT COUNT(*) FROM transactions WHERE company_id=?", (cid,)).fetchone()[0],
+            "total_mrr":    conn.execute("SELECT COALESCE(SUM(mrr),0) FROM customers WHERE company_id=? AND is_churned=0", (cid,)).fetchone()[0],
+        }
+        conn.close()
+        return result
 
     @app.get("/admin/reset-key", include_in_schema=False)
     def reset_admin_key(secret: str = Query(...)):
