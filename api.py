@@ -279,7 +279,25 @@ def create_app() -> "FastAPI":
     @app.get("/auth/keys", tags=["Auth"])
     def get_all_keys(_admin: dict = Depends(require_admin)):
         """List all API keys. Admin key required."""
-        return {"keys": list_api_keys()}
+        try:
+            keys = list_api_keys()
+            # Sanitize — convert any non-serializable values
+            clean = []
+            for k in keys:
+                clean.append({
+                    "key_id":       str(k.get("key_id","") or ""),
+                    "company_id":   str(k.get("company_id","") or ""),
+                    "company_name": str(k.get("company_name","") or ""),
+                    "key_prefix":   str(k.get("key_prefix","") or ""),
+                    "key_type":     str(k.get("key_type","") or ""),
+                    "is_active":    bool(k.get("is_active",0)),
+                    "created_at":   str(k.get("created_at","") or ""),
+                    "last_used_at": str(k.get("last_used_at","") or "") if k.get("last_used_at") else None,
+                    "revoked_at":   str(k.get("revoked_at","") or "") if k.get("revoked_at") else None,
+                })
+            return clean
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/auth/me", tags=["Auth"])
     def get_current_company(company: dict = Depends(require_auth)):
