@@ -574,51 +574,31 @@ def create_app() -> "FastAPI":
         """Return data stats for the authenticated company."""
         return get_tenant_stats(company["company_id"])
 
-    # ── STRIPE CONNECTOR ──────────────────────────────────────────────────────
-    @app.post("/connectors/stripe/connect", tags=["Connectors"])
-    def stripe_connect(
-        stripe_key: str = Query(..., description="Your Stripe Secret Key (sk_test_... or sk_live_...)"),
-        company:    dict = Depends(require_auth),
-    ):
-        """
-        Connect your Stripe account to EZER.
-        Pulls all customers and transactions. Takes 30-60 seconds.
-        """
-        if not stripe_key.startswith(("sk_live_", "sk_test_")):
-            raise HTTPException(status_code=400, detail="Invalid Stripe key. Must start with sk_live_ or sk_test_")
-        try:
-            import stripe as stripe_lib
-            stripe_lib.api_key = stripe_key
-            # Test connection first
-            account = stripe_lib.Account.retrieve()
-            account_name = account.get("business_profile", {}).get("name") or account.get("email", "Unknown")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Stripe connection failed: {str(e)}")
+    # ── ALL CONNECTORS ────────────────────────────────────────────────────────
 
-        # Run sync with user-provided key
-        try:
-            import os
-            os.environ["STRIPE_SECRET_KEY"] = stripe_key
-            from connectors.stripe_connector import sync_stripe
-            summary = sync_stripe(
-                company_id=company["company_id"],
-                fetch_invoices=True,
-                verbose=False,
-            )
-            summary["account_name"] = account_name
-            summary["mode"] = "live" if "live" in stripe_key else "test"
-            return summary
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+    # Helper to get connector status
+    def _connector_status(cid: str) -> dict:
+        conn = get_connection()
+        result = {
+            "customers":    conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=?", (cid,)).fetchone()[0],
+            "active":       conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=? AND is_churned=0", (cid,)).fetchone()[0],
+            "transactions": conn.execute("SELECT COUNT(*) FROM transactions WHERE company_id=?", (cid,)).fetchone()[0],
+            "total_mrr":    conn.execute("SELECT COALESCE(SUM(mrr),0) FROM customers WHERE company_id=? AND is_churned=0", (cid,)).fetchone()[0],
+            "events":       conn.execute("SELECT COUNT(*) FROM engagement_events WHERE company_id=?", (cid,)).fetchone()[0],
+            "tickets":      conn.execute("SELECT COUNT(*) FROM support_tickets WHERE company_id=?", (cid,)).fetchone()[0],
+        }
+        conn.close()
+        return result
 
+    # ── STRIPE ──────────────────────────────────────────────────────────────
     @app.post("/connectors/stripe/test", tags=["Connectors"])
     def stripe_test_key(
-        stripe_key: str = Query(..., description="Your Stripe Secret Key"),
+        stripe_key: str = Query(...),
         company:    dict = Depends(require_auth),
     ):
-        """Test if a Stripe key is valid before syncing."""
+        """Test if a Stripe secret key is valid."""
         if not stripe_key.startswith(("sk_live_", "sk_test_")):
-            raise HTTPException(status_code=400, detail="Invalid Stripe key format")
+            raise HTTPException(status_code=400, detail="Invalid Stripe key. Must start with sk_live_ or sk_test_")
         try:
             import stripe as stripe_lib
             stripe_lib.api_key = stripe_key
@@ -630,21 +610,254 @@ def create_app() -> "FastAPI":
                 "mode": "live" if "live" in stripe_key else "test",
             }
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid key: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/connectors/stripe/connect", tags=["Connectors"])
+    def stripe_connect(
+        stripe_key: str = Query(..., description="Your Stripe Secret Key"),
+        company:    dict = Depends(require_auth),
+    ):
+        """Connect Stripe — pulls all customers and transactions."""
+        if not stripe_key.startswith(("sk_live_", "sk_test_")):
+            raise HTTPException(status_code=400, detail="Invalid Stripe key")
+        try:
+            import stripe as stripe_lib
+            stripe_lib.api_key = stripe_key
+            account = stripe_lib.Account.retrieve()
+            account_name = account.get("business_profile", {}).get("name") or account.get("email", "Unknown")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Stripe connection failed: {e}")
+        try:
+            import os
+            os.environ["STRIPE_SECRET_KEY"] = stripe_key
+            from connectors.stripe_connector import sync_stripe
+            summary = sync_stripe(company_id=company["company_id"], fetch_invoices=True, verbose=False)
+            summary["account_name"] = account_name
+            summary["mode"] = "live" if "live" in stripe_key else "test"
+            summary["connector"] = "stripe"
+            return summary
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/connectors/stripe/status", tags=["Connectors"])
     def stripe_status(company: dict = Depends(require_auth)):
-        """Show current Stripe sync status."""
+        """Current Stripe data in EZER database."""
+        return _connector_status(company["company_id"])
+
+    # ── HUBSPOT ─────────────────────────────────────────────────────────────
+    @app.post("/connectors/hubspot/test", tags=["Connectors"])
+    def hubspot_test(
+        access_token: str = Query(..., description="HubSpot Private App Access Token"),
+        company:      dict = Depends(require_auth),
+    ):
+        """Test HubSpot access token."""
+        import requests as req
+        try:
+            r = req.get(
+                "https://api.hubapi.com/crm/v3/objects/contacts?limit=1",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if r.status_code == 401:
+                raise HTTPException(status_code=400, detail="Invalid HubSpot token")
+            data = r.json()
+            return {"valid": True, "message": "HubSpot connected successfully"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/connectors/hubspot/connect", tags=["Connectors"])
+    def hubspot_connect(
+        access_token: str = Query(..., description="HubSpot Private App Access Token"),
+        company:      dict = Depends(require_auth),
+    ):
+        """Connect HubSpot — pulls contacts, companies, deals, and engagement."""
+        try:
+            import os
+            os.environ["HUBSPOT_ACCESS_TOKEN"] = access_token
+            from connectors.hubspot_connector import sync_hubspot
+            summary = sync_hubspot(company_id=company["company_id"], verbose=False)
+            summary["connector"] = "hubspot"
+            return summary
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/connectors/hubspot/status", tags=["Connectors"])
+    def hubspot_status(company: dict = Depends(require_auth)):
+        """Current HubSpot data in EZER database."""
+        return _connector_status(company["company_id"])
+
+    # ── RAZORPAY ────────────────────────────────────────────────────────────
+    @app.post("/connectors/razorpay/test", tags=["Connectors"])
+    def razorpay_test(
+        key_id:     str = Query(..., description="Razorpay Key ID"),
+        key_secret: str = Query(..., description="Razorpay Key Secret"),
+        company:    dict = Depends(require_auth),
+    ):
+        """Test Razorpay credentials."""
+        import requests as req
+        try:
+            r = req.get(
+                "https://api.razorpay.com/v1/customers?count=1",
+                auth=(key_id, key_secret)
+            )
+            if r.status_code == 401:
+                raise HTTPException(status_code=400, detail="Invalid Razorpay credentials")
+            return {"valid": True, "message": "Razorpay connected successfully"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/connectors/razorpay/connect", tags=["Connectors"])
+    def razorpay_connect(
+        key_id:     str = Query(..., description="Razorpay Key ID"),
+        key_secret: str = Query(..., description="Razorpay Key Secret"),
+        company:    dict = Depends(require_auth),
+    ):
+        """Connect Razorpay — pulls customers and payment history."""
+        try:
+            import os
+            os.environ["RAZORPAY_KEY_ID"]     = key_id
+            os.environ["RAZORPAY_KEY_SECRET"]  = key_secret
+            from connectors.razorpay_connector import sync_razorpay
+            summary = sync_razorpay(company_id=company["company_id"], verbose=False)
+            summary["connector"] = "razorpay"
+            return summary
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/connectors/razorpay/status", tags=["Connectors"])
+    def razorpay_status(company: dict = Depends(require_auth)):
+        """Current Razorpay data in EZER database."""
+        return _connector_status(company["company_id"])
+
+    # ── INTERCOM ─────────────────────────────────────────────────────────────
+    @app.post("/connectors/intercom/test", tags=["Connectors"])
+    def intercom_test(
+        access_token: str = Query(..., description="Intercom Access Token"),
+        company:      dict = Depends(require_auth),
+    ):
+        """Test Intercom access token."""
+        import requests as req
+        try:
+            r = req.get(
+                "https://api.intercom.io/me",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json"
+                }
+            )
+            if r.status_code == 401:
+                raise HTTPException(status_code=400, detail="Invalid Intercom token")
+            data = r.json()
+            return {
+                "valid": True,
+                "app_name": data.get("app", {}).get("name", "Unknown"),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/connectors/intercom/connect", tags=["Connectors"])
+    def intercom_connect(
+        access_token: str = Query(..., description="Intercom Access Token"),
+        company:      dict = Depends(require_auth),
+    ):
+        """Connect Intercom — pulls conversations, contacts, and support data."""
+        try:
+            import os
+            os.environ["INTERCOM_ACCESS_TOKEN"] = access_token
+            from connectors.intercom_connector import sync_intercom
+            summary = sync_intercom(company_id=company["company_id"], verbose=False)
+            summary["connector"] = "intercom"
+            return summary
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/connectors/intercom/status", tags=["Connectors"])
+    def intercom_status(company: dict = Depends(require_auth)):
+        """Current Intercom data in EZER database."""
+        return _connector_status(company["company_id"])
+
+    # ── SALESFORCE ───────────────────────────────────────────────────────────
+    @app.post("/connectors/salesforce/test", tags=["Connectors"])
+    def salesforce_test(
+        username:       str = Query(...),
+        password:       str = Query(...),
+        security_token: str = Query(...),
+        client_id:      str = Query(...),
+        client_secret:  str = Query(...),
+        domain:         str = Query("login"),
+        company:        dict = Depends(require_auth),
+    ):
+        """Test Salesforce credentials."""
+        try:
+            import os
+            os.environ["SALESFORCE_USERNAME"]       = username
+            os.environ["SALESFORCE_PASSWORD"]       = password
+            os.environ["SALESFORCE_SECURITY_TOKEN"] = security_token
+            os.environ["SALESFORCE_CLIENT_ID"]      = client_id
+            os.environ["SALESFORCE_CLIENT_SECRET"]  = client_secret
+            os.environ["SALESFORCE_DOMAIN"]         = domain
+            from connectors.salesforce_connector import test_connection
+            ok = test_connection()
+            if not ok:
+                raise HTTPException(status_code=400, detail="Salesforce connection failed. Check your credentials.")
+            return {"valid": True, "message": "Salesforce connected successfully"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/connectors/salesforce/connect", tags=["Connectors"])
+    def salesforce_connect(
+        username:       str = Query(...),
+        password:       str = Query(...),
+        security_token: str = Query(...),
+        client_id:      str = Query(...),
+        client_secret:  str = Query(...),
+        domain:         str = Query("login"),
+        company:        dict = Depends(require_auth),
+    ):
+        """Connect Salesforce — pulls accounts, contacts, opportunities."""
+        try:
+            import os
+            os.environ["SALESFORCE_USERNAME"]       = username
+            os.environ["SALESFORCE_PASSWORD"]       = password
+            os.environ["SALESFORCE_SECURITY_TOKEN"] = security_token
+            os.environ["SALESFORCE_CLIENT_ID"]      = client_id
+            os.environ["SALESFORCE_CLIENT_SECRET"]  = client_secret
+            os.environ["SALESFORCE_DOMAIN"]         = domain
+            from connectors.salesforce_connector import sync_salesforce
+            summary = sync_salesforce(company_id=company["company_id"], verbose=False)
+            summary["connector"] = "salesforce"
+            return summary
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/connectors/salesforce/status", tags=["Connectors"])
+    def salesforce_status(company: dict = Depends(require_auth)):
+        """Current Salesforce data in EZER database."""
+        return _connector_status(company["company_id"])
+
+    # ── CONNECTOR OVERVIEW ───────────────────────────────────────────────────
+    @app.get("/connectors", tags=["Connectors"])
+    def list_connectors(company: dict = Depends(require_auth)):
+        """List all available connectors and their status."""
         cid = company["company_id"]
-        conn = get_connection()
-        result = {
-            "customers":    conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=?", (cid,)).fetchone()[0],
-            "active":       conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=? AND is_churned=0", (cid,)).fetchone()[0],
-            "transactions": conn.execute("SELECT COUNT(*) FROM transactions WHERE company_id=?", (cid,)).fetchone()[0],
-            "total_mrr":    conn.execute("SELECT COALESCE(SUM(mrr),0) FROM customers WHERE company_id=? AND is_churned=0", (cid,)).fetchone()[0],
+        status = _connector_status(cid)
+        return {
+            "connectors": [
+                {"name": "stripe",     "label": "Stripe",     "status": "available", "fields": ["stripe_key"]},
+                {"name": "hubspot",    "label": "HubSpot",    "status": "available", "fields": ["access_token"]},
+                {"name": "razorpay",   "label": "Razorpay",   "status": "available", "fields": ["key_id","key_secret"]},
+                {"name": "intercom",   "label": "Intercom",   "status": "available", "fields": ["access_token"]},
+                {"name": "salesforce", "label": "Salesforce", "status": "available", "fields": ["username","password","security_token","client_id","client_secret"]},
+            ],
+            "data_summary": status,
         }
-        conn.close()
-        return result
 
     @app.get("/admin/reset-key", include_in_schema=False)
     def reset_admin_key(secret: str = Query(...)):
