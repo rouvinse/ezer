@@ -152,6 +152,30 @@ class TrainRequest(BaseModel):
     run_inference:  bool = True
 
 
+# ── Connector credential schemas (POST body — never URL params) ───────────────
+
+class StripeCredentials(BaseModel):
+    stripe_key: str
+
+class HubSpotCredentials(BaseModel):
+    access_token: str
+
+class RazorpayCredentials(BaseModel):
+    key_id:     str
+    key_secret: str
+
+class IntercomCredentials(BaseModel):
+    access_token: str
+
+class SalesforceCredentials(BaseModel):
+    username:       str
+    password:       str
+    security_token: str
+    client_id:      str
+    client_secret:  str
+    domain:         str = "login"
+
+
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def get_db():
@@ -184,6 +208,8 @@ def rows_to_dicts(rows, col_names: list) -> list:
 # ── App factory ───────────────────────────────────────────────────────────────
 
 def create_app() -> "FastAPI":
+    # Disable interactive docs in production (RAILWAY_ENVIRONMENT set by Railway)
+    is_prod = os.environ.get("RAILWAY_ENVIRONMENT") == "production"
     app = FastAPI(
         title="ACIA — Autonomous CRM Intelligence Agent",
         description=(
@@ -192,16 +218,25 @@ def create_app() -> "FastAPI":
             "Built with: Python · SQLite · scikit-learn · Claude API"
         ),
         version="1.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url=None if is_prod else "/docs",
+        redoc_url=None if is_prod else "/redoc",
+        openapi_url=None if is_prod else "/openapi.json",
     )
 
+    TRUSTED_ORIGINS = [
+        "https://ezerapp.netlify.app",
+        "https://magenta-melomakarona-cb0b8e.netlify.app",
+        "https://ezercrmai.com",
+        "https://www.ezercrmai.com",
+        "https://ezeradmin.netlify.app",
+    ]
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=TRUSTED_ORIGINS,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["X-API-Key", "Content-Type", "Authorization"],
+        allow_credentials=False,
     )
 
     # ── Authentication setup ──────────────────────────────────────────────────
@@ -468,7 +503,7 @@ def create_app() -> "FastAPI":
 
     @app.get("/customers", tags=["Customers"])
     def list_customers(
-        limit:     int   = Query(50, le=500),
+        limit:     int   = Query(50, ge=1, le=500),
         offset:    int   = Query(0),
         churned:   bool  = Query(False),
         company:   dict  = Depends(require_auth),
@@ -521,26 +556,47 @@ def create_app() -> "FastAPI":
         return {"actions": actions, "count": len(actions)}
 
     @app.post("/approvals/{action_id}/approve", tags=["Approvals"])
-    def approve_action(
+    def approve_action_endpoint(
         action_id:    str,
         req:          ApproveRequest,
         company:      dict = Depends(require_auth),
     ):
         """Approve a single action."""
         ensure_approval_schema()
+        cid = company["company_id"]
+        # Check action exists and belongs to this company
+        df = read_sql(
+            "SELECT action_id FROM agent_actions WHERE action_id = ? AND company_id = ?",
+            params=(action_id, cid)
+        )
+        if df.empty:
+            raise HTTPException(status_code=404, detail="Action not found")
         from actions.approval import approve_action as _approve
-        return _approve(action_id, req.decided_by, req.edited_reason)
+        result = _approve(action_id, req.decided_by, req.edited_reason)
+        if result.get("success") is False:
+            raise HTTPException(status_code=409, detail=result.get("error", "Could not approve action"))
+        return result
 
     @app.post("/approvals/{action_id}/reject", tags=["Approvals"])
-    def reject_action(
+    def reject_action_endpoint(
         action_id:  str,
         req:        RejectRequest,
         company:    dict = Depends(require_auth),
     ):
         """Reject a single action."""
         ensure_approval_schema()
+        cid = company["company_id"]
+        df = read_sql(
+            "SELECT action_id FROM agent_actions WHERE action_id = ? AND company_id = ?",
+            params=(action_id, cid)
+        )
+        if df.empty:
+            raise HTTPException(status_code=404, detail="Action not found")
         from actions.approval import reject_action as _reject
-        return _reject(action_id, req.rejection_note, req.decided_by)
+        result = _reject(action_id, req.rejection_note, req.decided_by)
+        if result.get("success") is False:
+            raise HTTPException(status_code=409, detail=result.get("error", "Could not reject action"))
+        return result
 
     @app.post("/approvals/approve-all", tags=["Approvals"])
     def approve_all(
@@ -556,13 +612,26 @@ def create_app() -> "FastAPI":
 
     @app.get("/approvals/history", tags=["Approvals"])
     def get_approval_audit_trail(
-        limit:   int  = Query(50, le=500),
+        limit:   int  = Query(50, ge=1, le=500),
         company: dict = Depends(require_auth),
     ):
         """Full audit log of all approval decisions."""
         ensure_approval_schema()
         cid = company["company_id"]
-        return get_approval_audit_trail_db(company_id=cid, limit=limit)
+        try:
+            df = read_sql("""
+                SELECT action_id, customer_id, action_type, priority,
+                       reason, status, outcome, created_at, executed_at,
+                       decided_by, rejection_note
+                FROM agent_actions
+                WHERE company_id = ? AND status IN ('approved','rejected','executed')
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, params=(cid, limit))
+            history = df.to_dict("records") if not df.empty else []
+            return {"history": history, "count": len(history)}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"History query failed: {e}")
 
     @app.get("/me", tags=["Auth"])
     def get_current_company(company: dict = Depends(require_auth)):
@@ -593,10 +662,11 @@ def create_app() -> "FastAPI":
     # ── STRIPE ──────────────────────────────────────────────────────────────
     @app.post("/connectors/stripe/test", tags=["Connectors"])
     def stripe_test_key(
-        stripe_key: str = Query(...),
-        company:    dict = Depends(require_auth),
+        creds:   StripeCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Test if a Stripe secret key is valid."""
+        stripe_key = creds.stripe_key
         if not stripe_key.startswith(("sk_live_", "sk_test_")):
             raise HTTPException(status_code=400, detail="Invalid Stripe key. Must start with sk_live_ or sk_test_")
         try:
@@ -614,10 +684,11 @@ def create_app() -> "FastAPI":
 
     @app.post("/connectors/stripe/connect", tags=["Connectors"])
     def stripe_connect(
-        stripe_key: str = Query(..., description="Your Stripe Secret Key"),
-        company:    dict = Depends(require_auth),
+        creds:   StripeCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Connect Stripe — pulls all customers and transactions."""
+        stripe_key = creds.stripe_key
         if not stripe_key.startswith(("sk_live_", "sk_test_")):
             raise HTTPException(status_code=400, detail="Invalid Stripe key")
         try:
@@ -647,34 +718,36 @@ def create_app() -> "FastAPI":
     # ── HUBSPOT ─────────────────────────────────────────────────────────────
     @app.post("/connectors/hubspot/test", tags=["Connectors"])
     def hubspot_test(
-        access_token: str = Query(..., description="HubSpot Private App Access Token"),
-        company:      dict = Depends(require_auth),
+        creds:   HubSpotCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Test HubSpot access token."""
-        import requests as req
+        import requests as req_lib
         try:
-            r = req.get(
+            r = req_lib.get(
                 "https://api.hubapi.com/crm/v3/objects/contacts?limit=1",
-                headers={"Authorization": f"Bearer {access_token}"}
+                headers={"Authorization": f"Bearer {creds.access_token}"},
+                timeout=10,
             )
             if r.status_code == 401:
                 raise HTTPException(status_code=400, detail="Invalid HubSpot token")
-            data = r.json()
+            if not r.ok:
+                raise HTTPException(status_code=400, detail=f"HubSpot returned {r.status_code}")
             return {"valid": True, "message": "HubSpot connected successfully"}
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail="Could not reach HubSpot — check your token")
 
     @app.post("/connectors/hubspot/connect", tags=["Connectors"])
     def hubspot_connect(
-        access_token: str = Query(..., description="HubSpot Private App Access Token"),
-        company:      dict = Depends(require_auth),
+        creds:   HubSpotCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Connect HubSpot — pulls contacts, companies, deals, and engagement."""
         try:
             import os
-            os.environ["HUBSPOT_ACCESS_TOKEN"] = access_token
+            os.environ["HUBSPOT_ACCESS_TOKEN"] = creds.access_token
             from connectors.hubspot_connector import sync_hubspot
             summary = sync_hubspot(company_id=company["company_id"], verbose=False)
             summary["connector"] = "hubspot"
@@ -690,36 +763,37 @@ def create_app() -> "FastAPI":
     # ── RAZORPAY ────────────────────────────────────────────────────────────
     @app.post("/connectors/razorpay/test", tags=["Connectors"])
     def razorpay_test(
-        key_id:     str = Query(..., description="Razorpay Key ID"),
-        key_secret: str = Query(..., description="Razorpay Key Secret"),
-        company:    dict = Depends(require_auth),
+        creds:   RazorpayCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Test Razorpay credentials."""
-        import requests as req
+        import requests as req_lib
         try:
-            r = req.get(
+            r = req_lib.get(
                 "https://api.razorpay.com/v1/customers?count=1",
-                auth=(key_id, key_secret)
+                auth=(creds.key_id, creds.key_secret),
+                timeout=10,
             )
             if r.status_code == 401:
                 raise HTTPException(status_code=400, detail="Invalid Razorpay credentials")
+            if not r.ok:
+                raise HTTPException(status_code=400, detail=f"Razorpay returned {r.status_code}")
             return {"valid": True, "message": "Razorpay connected successfully"}
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail="Could not reach Razorpay — check your credentials")
 
     @app.post("/connectors/razorpay/connect", tags=["Connectors"])
     def razorpay_connect(
-        key_id:     str = Query(..., description="Razorpay Key ID"),
-        key_secret: str = Query(..., description="Razorpay Key Secret"),
-        company:    dict = Depends(require_auth),
+        creds:   RazorpayCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Connect Razorpay — pulls customers and payment history."""
         try:
             import os
-            os.environ["RAZORPAY_KEY_ID"]     = key_id
-            os.environ["RAZORPAY_KEY_SECRET"]  = key_secret
+            os.environ["RAZORPAY_KEY_ID"]    = creds.key_id
+            os.environ["RAZORPAY_KEY_SECRET"] = creds.key_secret
             from connectors.razorpay_connector import sync_razorpay
             summary = sync_razorpay(company_id=company["company_id"], verbose=False)
             summary["connector"] = "razorpay"
@@ -735,21 +809,24 @@ def create_app() -> "FastAPI":
     # ── INTERCOM ─────────────────────────────────────────────────────────────
     @app.post("/connectors/intercom/test", tags=["Connectors"])
     def intercom_test(
-        access_token: str = Query(..., description="Intercom Access Token"),
-        company:      dict = Depends(require_auth),
+        creds:   IntercomCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Test Intercom access token."""
-        import requests as req
+        import requests as req_lib
         try:
-            r = req.get(
+            r = req_lib.get(
                 "https://api.intercom.io/me",
                 headers={
-                    "Authorization": f"Bearer {access_token}",
+                    "Authorization": f"Bearer {creds.access_token}",
                     "Accept": "application/json"
-                }
+                },
+                timeout=10,
             )
             if r.status_code == 401:
                 raise HTTPException(status_code=400, detail="Invalid Intercom token")
+            if not r.ok:
+                raise HTTPException(status_code=400, detail=f"Intercom returned {r.status_code}")
             data = r.json()
             return {
                 "valid": True,
@@ -758,17 +835,17 @@ def create_app() -> "FastAPI":
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail="Could not reach Intercom — check your token")
 
     @app.post("/connectors/intercom/connect", tags=["Connectors"])
     def intercom_connect(
-        access_token: str = Query(..., description="Intercom Access Token"),
-        company:      dict = Depends(require_auth),
+        creds:   IntercomCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Connect Intercom — pulls conversations, contacts, and support data."""
         try:
             import os
-            os.environ["INTERCOM_ACCESS_TOKEN"] = access_token
+            os.environ["INTERCOM_ACCESS_TOKEN"] = creds.access_token
             from connectors.intercom_connector import sync_intercom
             summary = sync_intercom(company_id=company["company_id"], verbose=False)
             summary["connector"] = "intercom"
@@ -784,23 +861,18 @@ def create_app() -> "FastAPI":
     # ── SALESFORCE ───────────────────────────────────────────────────────────
     @app.post("/connectors/salesforce/test", tags=["Connectors"])
     def salesforce_test(
-        username:       str = Query(...),
-        password:       str = Query(...),
-        security_token: str = Query(...),
-        client_id:      str = Query(...),
-        client_secret:  str = Query(...),
-        domain:         str = Query("login"),
-        company:        dict = Depends(require_auth),
+        creds:   SalesforceCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Test Salesforce credentials."""
         try:
             import os
-            os.environ["SALESFORCE_USERNAME"]       = username
-            os.environ["SALESFORCE_PASSWORD"]       = password
-            os.environ["SALESFORCE_SECURITY_TOKEN"] = security_token
-            os.environ["SALESFORCE_CLIENT_ID"]      = client_id
-            os.environ["SALESFORCE_CLIENT_SECRET"]  = client_secret
-            os.environ["SALESFORCE_DOMAIN"]         = domain
+            os.environ["SALESFORCE_USERNAME"]       = creds.username
+            os.environ["SALESFORCE_PASSWORD"]       = creds.password
+            os.environ["SALESFORCE_SECURITY_TOKEN"] = creds.security_token
+            os.environ["SALESFORCE_CLIENT_ID"]      = creds.client_id
+            os.environ["SALESFORCE_CLIENT_SECRET"]  = creds.client_secret
+            os.environ["SALESFORCE_DOMAIN"]         = creds.domain
             from connectors.salesforce_connector import test_connection
             ok = test_connection()
             if not ok:
@@ -809,27 +881,22 @@ def create_app() -> "FastAPI":
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail="Salesforce connection failed — check credentials")
 
     @app.post("/connectors/salesforce/connect", tags=["Connectors"])
     def salesforce_connect(
-        username:       str = Query(...),
-        password:       str = Query(...),
-        security_token: str = Query(...),
-        client_id:      str = Query(...),
-        client_secret:  str = Query(...),
-        domain:         str = Query("login"),
-        company:        dict = Depends(require_auth),
+        creds:   SalesforceCredentials,
+        company: dict = Depends(require_auth),
     ):
         """Connect Salesforce — pulls accounts, contacts, opportunities."""
         try:
             import os
-            os.environ["SALESFORCE_USERNAME"]       = username
-            os.environ["SALESFORCE_PASSWORD"]       = password
-            os.environ["SALESFORCE_SECURITY_TOKEN"] = security_token
-            os.environ["SALESFORCE_CLIENT_ID"]      = client_id
-            os.environ["SALESFORCE_CLIENT_SECRET"]  = client_secret
-            os.environ["SALESFORCE_DOMAIN"]         = domain
+            os.environ["SALESFORCE_USERNAME"]       = creds.username
+            os.environ["SALESFORCE_PASSWORD"]       = creds.password
+            os.environ["SALESFORCE_SECURITY_TOKEN"] = creds.security_token
+            os.environ["SALESFORCE_CLIENT_ID"]      = creds.client_id
+            os.environ["SALESFORCE_CLIENT_SECRET"]  = creds.client_secret
+            os.environ["SALESFORCE_DOMAIN"]         = creds.domain
             from connectors.salesforce_connector import sync_salesforce
             summary = sync_salesforce(company_id=company["company_id"], verbose=False)
             summary["connector"] = "salesforce"
