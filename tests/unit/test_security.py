@@ -24,7 +24,7 @@ REPO = Path(__file__).parent.parent.parent
 class TestNoBackdoorRoutes:
     @pytest.fixture(autouse=True)
     def _src(self):
-        self.src = (REPO / "api.py").read_text()
+        self.src = (REPO / "api.py").read_text(encoding="utf-8", errors="replace")
 
     def test_no_raw_customer_data_dump_route(self):
         """
@@ -113,7 +113,7 @@ GLOBAL_CRED_PATTERNS = [
 class TestNoGlobalCredentials:
     @pytest.mark.parametrize("connector_rel", CONNECTOR_FILES)
     def test_no_module_level_credential_assignment(self, connector_rel):
-        src = (REPO / connector_rel).read_text()
+        src = (REPO / connector_rel).read_text(encoding="utf-8", errors="replace")
         for pattern in GLOBAL_CRED_PATTERNS:
             matches = re.findall(pattern, src, re.MULTILINE)
             assert not matches, (
@@ -127,7 +127,7 @@ class TestNoGlobalCredentials:
         Each connector's sync_* function must accept credentials as explicit
         parameters, not read them from module-level globals.
         """
-        src = (REPO / connector_rel).read_text()
+        src = (REPO / connector_rel).read_text(encoding="utf-8", errors="replace")
         # Find the def sync_... line
         m = re.search(r'def sync_\w+\(([^)]*)\)', src, re.DOTALL)
         assert m, f"{connector_rel} has no sync_* function"
@@ -147,14 +147,14 @@ class TestNoGlobalCredentials:
         The fixed authenticate() must return (access_token, instance_url)
         instead of mutating global state.
         """
-        src = (REPO / "connectors/salesforce_connector.py").read_text()
+        src = (REPO / "connectors/salesforce_connector.py").read_text(encoding="utf-8", errors="replace")
         # Should return a tuple, not set globals
         assert "return " in src
         assert "global _sf_access_token" not in src
         assert "global _sf_instance_url" not in src
 
     def test_intercom_no_module_level_token_constant(self):
-        src = (REPO / "connectors/intercom_connector.py").read_text()
+        src = (REPO / "connectors/intercom_connector.py").read_text(encoding="utf-8", errors="replace")
         # The old code had: INTERCOM_ACCESS_TOKEN = os.environ.get(...)
         # at module level (outside any function). The fix removes this.
         # Check that assignment is NOT at column 0 (module level).

@@ -143,7 +143,7 @@ class TestExecutorSourceContainsTenantScoping:
     @pytest.fixture(autouse=True)
     def _load_source(self):
         src = Path(__file__).parent.parent.parent / "actions" / "executor.py"
-        self.source = src.read_text()
+        self.source = src.read_text(encoding="utf-8", errors="replace")
 
     def test_load_context_scopes_customers_by_company_id(self):
         assert "AND company_id" in self.source or "company_id=?" in self.source, (
@@ -245,7 +245,7 @@ class TestExecutorDryRun:
     Verifies that the dry_run flag concept is present in executor source.
     """
     def test_dry_run_parameter_exists(self):
-        src = (Path(__file__).parent.parent.parent / "actions" / "executor.py").read_text()
+        src = (Path(__file__).parent.parent.parent / "actions" / "executor.py").read_text(encoding="utf-8", errors="replace")
         assert "dry_run" in src, "execute_batch must accept a dry_run parameter"
 
     def test_dry_run_skips_db_write(self):
@@ -253,7 +253,7 @@ class TestExecutorDryRun:
         Smoke test: when dry_run=True, no outcome should be written.
         We verify the logic branch exists in source.
         """
-        src = (Path(__file__).parent.parent.parent / "actions" / "executor.py").read_text()
+        src = (Path(__file__).parent.parent.parent / "actions" / "executor.py").read_text(encoding="utf-8", errors="replace")
         assert "dry_run" in src
         # The dry_run guard should appear near the outcome update
         assert src.count("dry_run") >= 2, (
