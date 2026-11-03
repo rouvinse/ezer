@@ -2,21 +2,96 @@ name: EZER CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  DB_ENGINE: sqlite
 
 jobs:
+  # ── Job 1: Tests ────────────────────────────────────────────────────────────
   test:
+    name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run unit + functional tests
+        env:
+          DB_ENGINE: sqlite
+        run: |
+          python -m pytest tests/ -v \
+            --tb=short \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-omit="tests/*,source_code/*,ezer_tests/*,data/generate.py" \
+            -q
+
+      - name: Upload coverage report
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
+
+  # ── Job 2: Security scan ────────────────────────────────────────────────────
+  security:
+    name: Security scan (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
           python-version: "3.11"
-          cache: "pip"
+
+      - name: Run bandit
+        run: |
+          pip install bandit --quiet
+          # -ll = medium severity and above, -ii = medium confidence and above
+          # Exit 0 on low-severity only; fail on medium+ findings
+          bandit -r api.py actions/ agent/ connectors/ utils/ -ll -ii \
+            --skip B101,B311 \
+            -f txt -o bandit-report.txt || (cat bandit-report.txt && exit 1)
+
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.txt
+          retention-days: 7
+
+  # ── Job 3: Smoke test (production-like) ────────────────────────────────────
+  smoke:
+    name: Smoke test (full pipeline)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -40,20 +115,21 @@ jobs:
           conn.close()
           assert c == 500, f'Expected 500 customers, got {c}'
           assert p == 500, f'Expected 500 predictions, got {p}'
-          print(f'✅ Smoke test passed — {c} customers, {p} predictions')
+          print(f'✅ Smoke test — {c} customers, {p} predictions')
           "
 
-      - name: Test API imports
+      - name: Test API startup
+        env:
+          DB_ENGINE: sqlite
         run: |
           python -c "
-          import sys
+          import sys, os
           sys.path.insert(0, '.')
           from api import create_app
           app = create_app()
-          print('✅ API imports OK')
+          routes = [r.path for r in app.routes]
+          required = ['/health', '/dashboard', '/customers', '/agent/run']
+          for r in required:
+              assert r in routes, f'Missing route: {r}'
+          print(f'✅ API OK — {len(routes)} routes registered')
           "
-
-      - name: Security lint
-        run: |
-          pip install bandit --quiet
-          bandit -r api.py actions/ agent/ connectors/ utils/ -ll -q || true

@@ -66,3 +66,9 @@ dist/
 
 # ── Railway / deployment ──────────────────────────────────
 .railway/
+
+# Leftover extraction folders and patch files
+ezer_tests/
+ezer_commits.patch
+ezer_fix.patch
+acia.db

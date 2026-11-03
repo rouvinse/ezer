@@ -9,9 +9,44 @@ Docs:     http://localhost:8000/docs  (dev only)
 
 from __future__ import annotations
 import os
+import uuid
+import time
+import logging
+import logging.config
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+
+# ── Structured JSON logging setup ────────────────────────────────────────────
+def _configure_logging():
+    """Configure JSON structured logging for production, plain text for dev."""
+    is_prod = os.environ.get("RAILWAY_ENVIRONMENT") == "production"
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+    if is_prod:
+        try:
+            from pythonjsonlogger import jsonlogger  # type: ignore
+            handler = logging.StreamHandler()
+            formatter = jsonlogger.JsonFormatter(
+                fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
+                datefmt="%Y-%m-%dT%H:%M:%S",
+            )
+            handler.setFormatter(formatter)
+            root = logging.getLogger()
+            root.handlers.clear()
+            root.addHandler(handler)
+            root.setLevel(log_level)
+        except ImportError:
+            logging.basicConfig(level=log_level)
+    else:
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
+_configure_logging()
+logger = logging.getLogger("acia.api")
 
 # FastAPI imports — install with: pip install fastapi uvicorn
 try:
@@ -202,6 +237,36 @@ def rows_to_dicts(rows, col_names: list) -> list:
     return result
 
 
+# ── Request ID + access log middleware ────────────────────────────────────────
+
+_access_logger = logging.getLogger("acia.access")
+
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    """
+    Attach a unique X-Request-ID to every request/response and emit a
+    structured access log line on completion.
+    """
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        t0 = time.perf_counter()
+        response: Response = await call_next(request)
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        response.headers["X-Request-ID"] = request_id
+        _access_logger.info(
+            "request completed",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": elapsed_ms,
+                "client": request.client.host if request.client else "unknown",
+            },
+        )
+        return response
+
+
 # ── Security headers middleware ───────────────────────────────────────────────
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -251,7 +316,8 @@ def create_app() -> "FastAPI":
         "https://ezeradmin.netlify.app",
     ]
 
-    # Security headers (before CORS so headers are on all responses)
+    # Middleware order: outermost first (request context → security headers → CORS → rate limit)
+    app.add_middleware(RequestContextMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
 
     app.add_middleware(
@@ -275,6 +341,23 @@ def create_app() -> "FastAPI":
     except ImportError:
         RATE_LIMITING = False
         limiter = None
+
+    # ── Startup / shutdown events ─────────────────────────────────────────────
+    @app.on_event("startup")
+    async def on_startup():
+        logger.info(
+            "ACIA API starting",
+            extra={
+                "version": "1.0.0",
+                "env": os.environ.get("RAILWAY_ENVIRONMENT", "development"),
+                "db_engine": os.environ.get("DB_ENGINE", "sqlite"),
+                "rate_limiting": RATE_LIMITING,
+            },
+        )
+
+    @app.on_event("shutdown")
+    async def on_shutdown():
+        logger.info("ACIA API shutting down gracefully")
 
     # ── Authentication setup ──────────────────────────────────────────────────
     # Ensure auth tables exist and admin key is bootstrapped

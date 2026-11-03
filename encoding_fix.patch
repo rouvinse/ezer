@@ -1,0 +1,94 @@
+From a6f028d81520209a83f351b21565b9356bb3bf45 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 3 Nov 2026 17:35:01 +0000
+Subject: [PATCH] fix: utf-8 encoding on read_text() for Windows compatibility
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Cz64KwHkF4CaTaX2Zqqga2
+---
+ tests/unit/test_executor.py |  6 +++---
+ tests/unit/test_security.py | 10 +++++-----
+ 2 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/tests/unit/test_executor.py b/tests/unit/test_executor.py
+index 5a69751..53867c9 100644
+--- a/tests/unit/test_executor.py
++++ b/tests/unit/test_executor.py
+@@ -143,7 +143,7 @@ class TestExecutorSourceContainsTenantScoping:
+     @pytest.fixture(autouse=True)
+     def _load_source(self):
+         src = Path(__file__).parent.parent.parent / "actions" / "executor.py"
+-        self.source = src.read_text()
++        self.source = src.read_text(encoding="utf-8", errors="replace")
+ 
+     def test_load_context_scopes_customers_by_company_id(self):
+         assert "AND company_id" in self.source or "company_id=?" in self.source, (
+@@ -245,7 +245,7 @@ class TestExecutorDryRun:
+     Verifies that the dry_run flag concept is present in executor source.
+     """
+     def test_dry_run_parameter_exists(self):
+-        src = (Path(__file__).parent.parent.parent / "actions" / "executor.py").read_text()
++        src = (Path(__file__).parent.parent.parent / "actions" / "executor.py").read_text(encoding="utf-8", errors="replace")
+         assert "dry_run" in src, "execute_batch must accept a dry_run parameter"
+ 
+     def test_dry_run_skips_db_write(self):
+@@ -253,7 +253,7 @@ class TestExecutorDryRun:
+         Smoke test: when dry_run=True, no outcome should be written.
+         We verify the logic branch exists in source.
+         """
+-        src = (Path(__file__).parent.parent.parent / "actions" / "executor.py").read_text()
++        src = (Path(__file__).parent.parent.parent / "actions" / "executor.py").read_text(encoding="utf-8", errors="replace")
+         assert "dry_run" in src
+         # The dry_run guard should appear near the outcome update
+         assert src.count("dry_run") >= 2, (
+diff --git a/tests/unit/test_security.py b/tests/unit/test_security.py
+index 6021fe9..4096648 100644
+--- a/tests/unit/test_security.py
++++ b/tests/unit/test_security.py
+@@ -24,7 +24,7 @@ REPO = Path(__file__).parent.parent.parent
+ class TestNoBackdoorRoutes:
+     @pytest.fixture(autouse=True)
+     def _src(self):
+-        self.src = (REPO / "api.py").read_text()
++        self.src = (REPO / "api.py").read_text(encoding="utf-8", errors="replace")
+ 
+     def test_no_raw_customer_data_dump_route(self):
+         """
+@@ -113,7 +113,7 @@ GLOBAL_CRED_PATTERNS = [
+ class TestNoGlobalCredentials:
+     @pytest.mark.parametrize("connector_rel", CONNECTOR_FILES)
+     def test_no_module_level_credential_assignment(self, connector_rel):
+-        src = (REPO / connector_rel).read_text()
++        src = (REPO / connector_rel).read_text(encoding="utf-8", errors="replace")
+         for pattern in GLOBAL_CRED_PATTERNS:
+             matches = re.findall(pattern, src, re.MULTILINE)
+             assert not matches, (
+@@ -127,7 +127,7 @@ class TestNoGlobalCredentials:
+         Each connector's sync_* function must accept credentials as explicit
+         parameters, not read them from module-level globals.
+         """
+-        src = (REPO / connector_rel).read_text()
++        src = (REPO / connector_rel).read_text(encoding="utf-8", errors="replace")
+         # Find the def sync_... line
+         m = re.search(r'def sync_\w+\(([^)]*)\)', src, re.DOTALL)
+         assert m, f"{connector_rel} has no sync_* function"
+@@ -147,14 +147,14 @@ class TestNoGlobalCredentials:
+         The fixed authenticate() must return (access_token, instance_url)
+         instead of mutating global state.
+         """
+-        src = (REPO / "connectors/salesforce_connector.py").read_text()
++        src = (REPO / "connectors/salesforce_connector.py").read_text(encoding="utf-8", errors="replace")
+         # Should return a tuple, not set globals
+         assert "return " in src
+         assert "global _sf_access_token" not in src
+         assert "global _sf_instance_url" not in src
+ 
+     def test_intercom_no_module_level_token_constant(self):
+-        src = (REPO / "connectors/intercom_connector.py").read_text()
++        src = (REPO / "connectors/intercom_connector.py").read_text(encoding="utf-8", errors="replace")
+         # The old code had: INTERCOM_ACCESS_TOKEN = os.environ.get(...)
+         # at module level (outside any function). The fix removes this.
+         # Check that assignment is NOT at column 0 (module level).
+-- 
+2.43.0
+
