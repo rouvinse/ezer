@@ -2,9 +2,9 @@
 ACIA — REST API (FastAPI)
 Exposes the full CRM intelligence system as a REST service.
 
-Install:  pip install fastapi uvicorn
+Install:  pip install fastapi uvicorn slowapi
 Run:      uvicorn api.main:app --reload --port 8000
-Docs:     http://localhost:8000/docs
+Docs:     http://localhost:8000/docs  (dev only)
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ from typing import Optional
 
 # FastAPI imports — install with: pip install fastapi uvicorn
 try:
-    from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Security, Depends
+    from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Security, Depends, Request, Response
     from fastapi.security import APIKeyHeader
     from fastapi.middleware.cors import CORSMiddleware
+    from starlette.middleware.base import BaseHTTPMiddleware
     from pydantic import BaseModel
     FASTAPI_AVAILABLE = True
 except ImportError:
@@ -34,10 +35,6 @@ from actions.approval import (
     set_trust_mode, get_trust_mode, ensure_approval_schema,
     TRUST_MODE_FULL, TRUST_MODE_HIGH_RISK, TRUST_MODE_AUTO
 )
-# Stripe connector
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.auth import (
     validate_api_key, create_api_key, revoke_api_key,
@@ -205,6 +202,29 @@ def rows_to_dicts(rows, col_names: list) -> list:
     return result
 
 
+# ── Security headers middleware ───────────────────────────────────────────────
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to every response."""
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'"
+        )
+        response.headers["Permissions-Policy"] = (
+            "geolocation=(), microphone=(), camera=()"
+        )
+        # HSTS — only if we know we're running on HTTPS (Railway/production)
+        if os.environ.get("RAILWAY_ENVIRONMENT") == "production":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains; preload"
+            )
+        return response
+
+
 # ── App factory ───────────────────────────────────────────────────────────────
 
 def create_app() -> "FastAPI":
@@ -215,7 +235,7 @@ def create_app() -> "FastAPI":
         description=(
             "AI-powered CRM system that predicts churn and conversion, "
             "then autonomously executes engagement actions.\n\n"
-            "Built with: Python · SQLite · scikit-learn · Claude API"
+            "Built with: Python · PostgreSQL · scikit-learn · Claude API"
         ),
         version="1.0.0",
         docs_url=None if is_prod else "/docs",
@@ -231,6 +251,9 @@ def create_app() -> "FastAPI":
         "https://ezeradmin.netlify.app",
     ]
 
+    # Security headers (before CORS so headers are on all responses)
+    app.add_middleware(SecurityHeadersMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=TRUSTED_ORIGINS,
@@ -238,6 +261,20 @@ def create_app() -> "FastAPI":
         allow_headers=["X-API-Key", "Content-Type", "Authorization"],
         allow_credentials=False,
     )
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    try:
+        from slowapi import Limiter, _rate_limit_exceeded_handler
+        from slowapi.util import get_remote_address
+        from slowapi.errors import RateLimitExceeded
+
+        limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        RATE_LIMITING = True
+    except ImportError:
+        RATE_LIMITING = False
+        limiter = None
 
     # ── Authentication setup ──────────────────────────────────────────────────
     # Ensure auth tables exist and admin key is bootstrapped
@@ -331,8 +368,8 @@ def create_app() -> "FastAPI":
                     "revoked_at":   str(k.get("revoked_at","") or "") if k.get("revoked_at") else None,
                 })
             return clean
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to retrieve keys")
 
     @app.get("/auth/me", tags=["Auth"])
     def get_current_company(company: dict = Depends(require_auth)):
@@ -359,8 +396,8 @@ def create_app() -> "FastAPI":
             n = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
             conn.close()
             return {"status": "ok", "db": "connected", "customers": n}
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"DB error: {e}")
+        except Exception:
+            raise HTTPException(status_code=503, detail="Database unavailable")
 
     # ── Dashboard ─────────────────────────────────────────────────────────────
 
@@ -407,7 +444,7 @@ def create_app() -> "FastAPI":
         finally:
             conn.close()
 
-    # ── Customers ─────────────────────────────────────────────────────────────
+    # ── Agent ─────────────────────────────────────────────────────────────────
 
     @app.post("/agent/run", tags=["Agent"])
     def run_agent(
@@ -442,6 +479,8 @@ def create_app() -> "FastAPI":
         result["company_id"] = company_id
         result["timestamp"] = datetime.now().isoformat()
         return result
+
+    # ── Predictions ───────────────────────────────────────────────────────────
 
     @app.get("/predictions/churn", tags=["Predictions"])
     def get_churn_predictions(
@@ -500,25 +539,40 @@ def create_app() -> "FastAPI":
         segments = df.to_dict("records") if not df.empty else []
         return {"segments": segments}
 
+    # ── Customers ─────────────────────────────────────────────────────────────
 
     @app.get("/customers", tags=["Customers"])
     def list_customers(
         limit:     int   = Query(50, ge=1, le=500),
         offset:    int   = Query(0),
         churned:   bool  = Query(False),
+        search:    str   = Query("", description="Search by name or email (partial match)"),
         company:   dict  = Depends(require_auth),
     ):
-        """List customers with their latest predictions."""
+        """List customers with their latest predictions. Supports name/email search."""
         cid = company["company_id"]
-        df = read_sql("""
-            SELECT c.customer_id, c.name, c.email, c.plan, c.mrr,
-                   c.health_score, c.is_churned, c.signup_date,
-                   p.churn_score, p.conversion_score, p.segment
-            FROM customers c
-            LEFT JOIN ml_predictions p ON p.customer_id = c.customer_id AND p.company_id = c.company_id
-            WHERE c.company_id = ? AND c.is_churned = ?
-            ORDER BY c.mrr DESC LIMIT ? OFFSET ?
-        """, params=(cid, 1 if churned else 0, limit, offset))
+        if search:
+            pattern = f"%{search}%"
+            df = read_sql("""
+                SELECT c.customer_id, c.name, c.email, c.plan, c.mrr,
+                       c.health_score, c.is_churned, c.signup_date,
+                       p.churn_score, p.conversion_score, p.segment
+                FROM customers c
+                LEFT JOIN ml_predictions p ON p.customer_id = c.customer_id AND p.company_id = c.company_id
+                WHERE c.company_id = ? AND c.is_churned = ?
+                  AND (LOWER(c.name) LIKE LOWER(?) OR LOWER(c.email) LIKE LOWER(?))
+                ORDER BY c.mrr DESC LIMIT ? OFFSET ?
+            """, params=(cid, 1 if churned else 0, pattern, pattern, limit, offset))
+        else:
+            df = read_sql("""
+                SELECT c.customer_id, c.name, c.email, c.plan, c.mrr,
+                       c.health_score, c.is_churned, c.signup_date,
+                       p.churn_score, p.conversion_score, p.segment
+                FROM customers c
+                LEFT JOIN ml_predictions p ON p.customer_id = c.customer_id AND p.company_id = c.company_id
+                WHERE c.company_id = ? AND c.is_churned = ?
+                ORDER BY c.mrr DESC LIMIT ? OFFSET ?
+            """, params=(cid, 1 if churned else 0, limit, offset))
         customers = df.to_dict("records") if not df.empty else []
         return {"customers": customers, "count": len(customers), "offset": offset}
 
@@ -534,8 +588,10 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=404, detail="Customer not found")
         return df.iloc[0].to_dict()
 
+    # ── Approvals ─────────────────────────────────────────────────────────────
+
     @app.get("/approvals/queue", tags=["Approvals"])
-    def get_approval_queue(
+    def get_approval_queue_endpoint(
         limit:   int  = Query(50, le=500),
         company: dict = Depends(require_auth),
     ):
@@ -619,24 +675,55 @@ def create_app() -> "FastAPI":
         ensure_approval_schema()
         cid = company["company_id"]
         try:
+            # rejection_note lives in approval_log, not agent_actions.
+            # Join to get it where available; fall back to NULL for older rows.
             df = read_sql("""
-                SELECT action_id, customer_id, action_type, priority,
-                       reason, status, outcome, created_at, executed_at,
-                       decided_by, rejection_note
-                FROM agent_actions
-                WHERE company_id = ? AND status IN ('approved','rejected','executed')
-                ORDER BY created_at DESC
+                SELECT a.action_id, a.customer_id, a.action_type, a.priority,
+                       a.reason, a.status, a.outcome, a.created_at, a.executed_at,
+                       a.decided_by,
+                       al.rejection_note
+                FROM agent_actions a
+                LEFT JOIN approval_log al
+                       ON al.action_id = a.action_id
+                WHERE a.company_id = ? AND a.status IN ('approved','rejected','executed')
+                ORDER BY a.created_at DESC
                 LIMIT ?
             """, params=(cid, limit))
             history = df.to_dict("records") if not df.empty else []
             return {"history": history, "count": len(history)}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"History query failed: {e}")
+        except Exception:
+            raise HTTPException(status_code=500, detail="History query failed")
 
-    @app.get("/me", tags=["Auth"])
-    def get_current_company(company: dict = Depends(require_auth)):
-        """Return info about the authenticated company."""
-        return company
+    # ── Trust mode ────────────────────────────────────────────────────────────
+
+    @app.get("/settings/trust-mode", tags=["Settings"])
+    def get_trust_mode_endpoint(company: dict = Depends(require_auth)):
+        """Get the current trust mode for this company."""
+        try:
+            mode = get_trust_mode(company["company_id"])
+            return {"trust_mode": mode, "company_id": company["company_id"]}
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to retrieve trust mode")
+
+    @app.post("/settings/trust-mode", tags=["Settings"])
+    def set_trust_mode_endpoint(
+        req:     TrustModeRequest,
+        company: dict = Depends(require_auth),
+    ):
+        """Update the trust mode for this company."""
+        valid_modes = {TRUST_MODE_FULL, TRUST_MODE_HIGH_RISK, TRUST_MODE_AUTO}
+        if req.trust_mode not in valid_modes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid trust_mode. Must be one of: {', '.join(sorted(valid_modes))}"
+            )
+        try:
+            set_trust_mode(company["company_id"], req.trust_mode, req.updated_by)
+            return {"trust_mode": req.trust_mode, "updated_by": req.updated_by, "updated": True}
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to update trust mode")
+
+    # ── Me / tenant stats ─────────────────────────────────────────────────────
 
     @app.get("/me/stats", tags=["Auth"])
     def my_stats(company: dict = Depends(require_auth)):
@@ -699,16 +786,20 @@ def create_app() -> "FastAPI":
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Stripe connection failed: {e}")
         try:
-            import os
-            os.environ["STRIPE_SECRET_KEY"] = stripe_key
+            # SEC-NEW-003 fix: pass key directly, never write to os.environ
             from connectors.stripe_connector import sync_stripe
-            summary = sync_stripe(company_id=company["company_id"], fetch_invoices=True, verbose=False)
+            summary = sync_stripe(
+                company_id=company["company_id"],
+                stripe_key=stripe_key,
+                fetch_invoices=True,
+                verbose=False,
+            )
             summary["account_name"] = account_name
             summary["mode"] = "live" if "live" in stripe_key else "test"
             summary["connector"] = "stripe"
             return summary
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            raise HTTPException(status_code=500, detail="Stripe sync failed")
 
     @app.get("/connectors/stripe/status", tags=["Connectors"])
     def stripe_status(company: dict = Depends(require_auth)):
@@ -736,7 +827,7 @@ def create_app() -> "FastAPI":
             return {"valid": True, "message": "HubSpot connected successfully"}
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             raise HTTPException(status_code=400, detail="Could not reach HubSpot — check your token")
 
     @app.post("/connectors/hubspot/connect", tags=["Connectors"])
@@ -746,14 +837,17 @@ def create_app() -> "FastAPI":
     ):
         """Connect HubSpot — pulls contacts, companies, deals, and engagement."""
         try:
-            import os
-            os.environ["HUBSPOT_ACCESS_TOKEN"] = creds.access_token
+            # SEC-NEW-003 fix: pass token directly, never write to os.environ
             from connectors.hubspot_connector import sync_hubspot
-            summary = sync_hubspot(company_id=company["company_id"], verbose=False)
+            summary = sync_hubspot(
+                company_id=company["company_id"],
+                access_token=creds.access_token,
+                verbose=False,
+            )
             summary["connector"] = "hubspot"
             return summary
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            raise HTTPException(status_code=500, detail="HubSpot sync failed")
 
     @app.get("/connectors/hubspot/status", tags=["Connectors"])
     def hubspot_status(company: dict = Depends(require_auth)):
@@ -781,7 +875,7 @@ def create_app() -> "FastAPI":
             return {"valid": True, "message": "Razorpay connected successfully"}
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             raise HTTPException(status_code=400, detail="Could not reach Razorpay — check your credentials")
 
     @app.post("/connectors/razorpay/connect", tags=["Connectors"])
@@ -791,15 +885,18 @@ def create_app() -> "FastAPI":
     ):
         """Connect Razorpay — pulls customers and payment history."""
         try:
-            import os
-            os.environ["RAZORPAY_KEY_ID"]    = creds.key_id
-            os.environ["RAZORPAY_KEY_SECRET"] = creds.key_secret
+            # SEC-NEW-003 fix: pass keys directly, never write to os.environ
             from connectors.razorpay_connector import sync_razorpay
-            summary = sync_razorpay(company_id=company["company_id"], verbose=False)
+            summary = sync_razorpay(
+                company_id=company["company_id"],
+                key_id=creds.key_id,
+                key_secret=creds.key_secret,
+                verbose=False,
+            )
             summary["connector"] = "razorpay"
             return summary
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            raise HTTPException(status_code=500, detail="Razorpay sync failed")
 
     @app.get("/connectors/razorpay/status", tags=["Connectors"])
     def razorpay_status(company: dict = Depends(require_auth)):
@@ -834,7 +931,7 @@ def create_app() -> "FastAPI":
             }
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             raise HTTPException(status_code=400, detail="Could not reach Intercom — check your token")
 
     @app.post("/connectors/intercom/connect", tags=["Connectors"])
@@ -844,14 +941,17 @@ def create_app() -> "FastAPI":
     ):
         """Connect Intercom — pulls conversations, contacts, and support data."""
         try:
-            import os
-            os.environ["INTERCOM_ACCESS_TOKEN"] = creds.access_token
+            # SEC-NEW-003 fix: pass token directly, never write to os.environ
             from connectors.intercom_connector import sync_intercom
-            summary = sync_intercom(company_id=company["company_id"], verbose=False)
+            summary = sync_intercom(
+                company_id=company["company_id"],
+                access_token=creds.access_token,
+                verbose=False,
+            )
             summary["connector"] = "intercom"
             return summary
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            raise HTTPException(status_code=500, detail="Intercom sync failed")
 
     @app.get("/connectors/intercom/status", tags=["Connectors"])
     def intercom_status(company: dict = Depends(require_auth)):
@@ -866,21 +966,22 @@ def create_app() -> "FastAPI":
     ):
         """Test Salesforce credentials."""
         try:
-            import os
-            os.environ["SALESFORCE_USERNAME"]       = creds.username
-            os.environ["SALESFORCE_PASSWORD"]       = creds.password
-            os.environ["SALESFORCE_SECURITY_TOKEN"] = creds.security_token
-            os.environ["SALESFORCE_CLIENT_ID"]      = creds.client_id
-            os.environ["SALESFORCE_CLIENT_SECRET"]  = creds.client_secret
-            os.environ["SALESFORCE_DOMAIN"]         = creds.domain
+            # SEC-NEW-003 fix: pass creds directly, never write to os.environ
             from connectors.salesforce_connector import test_connection
-            ok = test_connection()
+            ok = test_connection(
+                username=creds.username,
+                password=creds.password,
+                security_token=creds.security_token,
+                client_id=creds.client_id,
+                client_secret=creds.client_secret,
+                domain=creds.domain,
+            )
             if not ok:
                 raise HTTPException(status_code=400, detail="Salesforce connection failed. Check your credentials.")
             return {"valid": True, "message": "Salesforce connected successfully"}
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             raise HTTPException(status_code=400, detail="Salesforce connection failed — check credentials")
 
     @app.post("/connectors/salesforce/connect", tags=["Connectors"])
@@ -890,19 +991,22 @@ def create_app() -> "FastAPI":
     ):
         """Connect Salesforce — pulls accounts, contacts, opportunities."""
         try:
-            import os
-            os.environ["SALESFORCE_USERNAME"]       = creds.username
-            os.environ["SALESFORCE_PASSWORD"]       = creds.password
-            os.environ["SALESFORCE_SECURITY_TOKEN"] = creds.security_token
-            os.environ["SALESFORCE_CLIENT_ID"]      = creds.client_id
-            os.environ["SALESFORCE_CLIENT_SECRET"]  = creds.client_secret
-            os.environ["SALESFORCE_DOMAIN"]         = creds.domain
+            # SEC-NEW-003 fix: pass creds directly, never write to os.environ
             from connectors.salesforce_connector import sync_salesforce
-            summary = sync_salesforce(company_id=company["company_id"], verbose=False)
+            summary = sync_salesforce(
+                company_id=company["company_id"],
+                username=creds.username,
+                password=creds.password,
+                security_token=creds.security_token,
+                client_id=creds.client_id,
+                client_secret=creds.client_secret,
+                domain=creds.domain,
+                verbose=False,
+            )
             summary["connector"] = "salesforce"
             return summary
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            raise HTTPException(status_code=500, detail="Salesforce sync failed")
 
     @app.get("/connectors/salesforce/status", tags=["Connectors"])
     def salesforce_status(company: dict = Depends(require_auth)):
@@ -926,39 +1030,9 @@ def create_app() -> "FastAPI":
             "data_summary": status,
         }
 
-    @app.get("/admin/reset-key", include_in_schema=False)
-    def reset_admin_key(secret: str = Query(...)):
-        if secret != "ezer-reset-2026":
-            raise HTTPException(status_code=403, detail="Invalid secret")
-        try:
-            from utils.db import get_connection
-            conn = get_connection()
-            conn.execute("DELETE FROM api_keys WHERE key_type = 'admin'")
-            conn.commit()
-            conn.close()
-            from utils.auth import create_api_key
-            result = create_api_key("ACIA Admin", "admin@acia.internal", key_type="admin")
-            return {"new_admin_key": result["api_key"]}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @app.get("/admin/debug-key", include_in_schema=False)
-    def debug_key(secret: str = Query(...), key: str = Query(...)):
-        if secret != "ezer-reset-2026":
-            raise HTTPException(status_code=403, detail="Invalid secret")
-        import hashlib
-        key_hash = hashlib.sha256(key.encode()).hexdigest()
-        try:
-            df = read_sql(
-                "SELECT k.key_id, k.company_id, k.key_type, k.is_active, c.company_name "
-                "FROM api_keys k "
-                "JOIN companies c ON c.company_id = k.company_id "
-                "WHERE k.key_hash = ?",
-                params=(key_hash,)
-            )
-            return {"key_hash": key_hash, "found": not df.empty, "rows": df.to_dict("records") if not df.empty else []}
-        except Exception as e:
-            return {"error": str(e), "key_hash": key_hash}
+    # NOTE: /admin/reset-key and /admin/debug-key have been permanently removed.
+    # These were unauthenticated backdoor routes (SEC-NEW-001). Any emergency
+    # key rotation must be done directly via the Railway PostgreSQL console.
 
     return app
 

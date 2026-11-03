@@ -3,6 +3,10 @@ ACIA — Action Scheduler
 Takes PlannedActions from the planner, applies deduplication,
 cooldown logic, and priority scoring, then writes the final
 action queue to the agent_actions table.
+
+SEC-NEW-002 FIX: _get_recent_actions() now accepts and applies company_id
+so cooldown checks are scoped per-tenant. A cooldown triggered by
+Company A's actions no longer blocks Company B's customers.
 """
 
 from __future__ import annotations
@@ -37,13 +41,20 @@ COOLDOWN_DAYS: dict[str, int] = {
 }
 
 
-def _get_recent_actions(conn, days_back: int = 90) -> set[tuple]:
-    """Returns set of (customer_id, action_type) executed within cooldown window."""
+def _get_recent_actions(conn, company_id: str, days_back: int = 90) -> set[tuple]:
+    """
+    Returns set of (customer_id, action_type) executed within cooldown window
+    for the given tenant.
+
+    SEC-NEW-002: company_id is now required so cooldown checks are isolated
+    per tenant. Previously this queried all tenants' executed actions, meaning
+    a high-volume tenant could accidentally suppress actions for another.
+    """
     cutoff = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d %H:%M:%S")
     rows = conn.execute(
         "SELECT customer_id, action_type, executed_at FROM agent_actions "
-        "WHERE status='executed' AND executed_at >= ?",
-        (cutoff,)
+        "WHERE status='executed' AND executed_at >= ? AND company_id=?",
+        (cutoff, company_id)
     ).fetchall()
 
     # Build set of blocked (customer_id, action_type) pairs still in cooldown
@@ -71,19 +82,22 @@ def _score_action(plan: PlannedAction, ltv: float) -> float:
 
 
 def schedule(
-    plans: list[PlannedAction],
+    plans:      list[PlannedAction],
     ltv_lookup: dict[str, float],
     company_id: str | None = None,
-    verbose: bool = True,
+    verbose:    bool = True,
 ) -> list[dict]:
     """
-    1. Filter out cooldown-blocked actions
+    1. Filter out cooldown-blocked actions (per-tenant)
     2. Score and sort by urgency
     3. Write to agent_actions table (status='pending')
     Returns the list of queued action dicts.
     """
-    conn    = get_connection()
-    blocked = _get_recent_actions(conn)
+    cid_scope = company_id or get_tenant().company_id
+    conn      = get_connection()
+
+    # Cooldown check now scoped to this tenant only
+    blocked = _get_recent_actions(conn, cid_scope)
     now     = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     queued   = []
@@ -98,22 +112,21 @@ def schedule(
         ltv   = ltv_lookup.get(plan.customer_id, 0.0)
         score = _score_action(plan, ltv)
 
-        cid_val = company_id or get_tenant().company_id
         action = {
-            "action_id":   str(uuid.uuid4()),
-            "customer_id": plan.customer_id,
-            "action_type": plan.action_type,
-            "reason":      plan.reason,
-            "priority":    plan.priority,
-            "status":      "pending",
-            "outcome":     None,
-            "created_at":  now,
-            "executed_at": None,
-            "company_id":  cid_val,
-            "_score":      score,           # internal, not stored
-            "_ltv":        ltv,
-            "_llm_enhanced": plan.llm_enhanced,
-            "_metadata":   json.dumps(plan.metadata),
+            "action_id":       str(uuid.uuid4()),
+            "customer_id":     plan.customer_id,
+            "action_type":     plan.action_type,
+            "reason":          plan.reason,
+            "priority":        plan.priority,
+            "status":          "pending",
+            "outcome":         None,
+            "created_at":      now,
+            "executed_at":     None,
+            "company_id":      cid_scope,
+            "_score":          score,           # internal, not stored
+            "_ltv":            ltv,
+            "_llm_enhanced":   plan.llm_enhanced,
+            "_metadata":       json.dumps(plan.metadata),
         }
         queued.append(action)
 
@@ -123,24 +136,27 @@ def schedule(
     # Ensure approval schema exists
     ensure_approval_schema()
 
-    # Write to DB (clear old pending first)
-    cid_scope = company_id or get_tenant().company_id
+    # Write to DB (clear old pending first — scoped to tenant)
     conn.execute(
-        "DELETE FROM agent_actions WHERE status IN ('pending','pending_approval') AND company_id=?",
+        "DELETE FROM agent_actions "
+        "WHERE status IN ('pending','pending_approval') AND company_id=?",
         (cid_scope,)
     )
     for a in queued:
-        # Route to approval queue or direct execution based on trust mode
         requires_approval = needs_approval(a["priority"], cid_scope)
         initial_status    = "pending_approval" if requires_approval else "pending"
 
         conn.execute(
             "INSERT INTO agent_actions "
-            "(action_id, customer_id, action_type, reason, priority, status, outcome, created_at, executed_at, company_id) "
+            "(action_id, customer_id, action_type, reason, priority, status, "
+            " outcome, created_at, executed_at, company_id) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (a["action_id"], a["customer_id"], a["action_type"],
-             a["reason"], a["priority"], initial_status,
-             a["outcome"], a["created_at"], a["executed_at"], a.get("company_id", cid_scope))
+            (
+                a["action_id"], a["customer_id"], a["action_type"],
+                a["reason"],    a["priority"],    initial_status,
+                a["outcome"],   a["created_at"],  a["executed_at"],
+                cid_scope,
+            )
         )
     conn.commit()
     conn.close()
@@ -187,10 +203,10 @@ if __name__ == "__main__":
     from agent.rules    import evaluate, get_enriched_df
     from agent.planner  import plan_actions
 
-    df         = get_enriched_df()
-    candidates = evaluate(verbose=False)
-    cust_lookup = df.set_index("customer_id").to_dict("index")
+    df          = get_enriched_df()
+    candidates  = evaluate(verbose=False)
     ltv_lookup  = df.set_index("customer_id")["ltv_estimate"].to_dict()
+    cust_lookup = df.set_index("customer_id").to_dict("index")
 
     plans = plan_actions(candidates, cust_lookup, use_llm=False, verbose=False)
 

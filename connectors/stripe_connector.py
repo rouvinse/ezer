@@ -23,7 +23,7 @@ Setup:
   1. Get your Stripe Secret Key from dashboard.stripe.com/apikeys
   2. Set environment variable: STRIPE_SECRET_KEY=sk_live_...
   3. Run: python connectors/stripe_connector.py --sync
-  4. Or call sync_stripe(company_id) from your code
+  4. Or call sync_stripe(company_id, stripe_key=...) from your code
 
 Usage:
   python connectors/stripe_connector.py --sync --company-id YOUR_COMPANY_ID
@@ -43,8 +43,6 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-
-STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 
 # Map Stripe plan intervals to readable plan names
 PLAN_MAP = {
@@ -70,8 +68,14 @@ CURRENCY_MAP = {
 
 # ── Connection ─────────────────────────────────────────────────────────────────
 
-def get_stripe():
-    """Get authenticated Stripe client."""
+def get_stripe(stripe_key: str = None):
+    """
+    Get authenticated Stripe client.
+
+    Args:
+        stripe_key: Stripe secret key. Falls back to STRIPE_SECRET_KEY
+                    env var only when called from the CLI (not the API).
+    """
     try:
         import stripe
     except ImportError:
@@ -79,28 +83,31 @@ def get_stripe():
             "stripe not installed. Run: pip install stripe"
         )
 
-    key = STRIPE_SECRET_KEY
+    key = stripe_key or os.environ.get("STRIPE_SECRET_KEY", "")
     if not key:
         raise ValueError(
-            "STRIPE_SECRET_KEY environment variable not set.\n"
-            "Get your key from: https://dashboard.stripe.com/apikeys\n"
-            "Then run: export STRIPE_SECRET_KEY=sk_live_..."
+            "Stripe secret key not provided.\n"
+            "Pass stripe_key= to sync_stripe(), or set STRIPE_SECRET_KEY "
+            "in your environment for CLI use.\n"
+            "Get your key from: https://dashboard.stripe.com/apikeys"
         )
 
     stripe.api_key = key
     return stripe
 
 
-def test_connection() -> bool:
+def test_connection(stripe_key: str = None) -> bool:
     """Test Stripe connection and show account info."""
     try:
-        stripe = get_stripe()
+        stripe = get_stripe(stripe_key)
         account = stripe.Account.retrieve()
+        key_preview = (stripe_key or os.environ.get("STRIPE_SECRET_KEY", ""))[:12]
+        mode = "LIVE" if "live" in (stripe_key or os.environ.get("STRIPE_SECRET_KEY", "")) else "TEST"
         print(f"\n✅ Stripe connected")
         print(f"   Account : {account.get('business_profile', {}).get('name', 'Unknown')}")
         print(f"   Email   : {account.get('email', 'Unknown')}")
         print(f"   Country : {account.get('country', 'Unknown')}")
-        print(f"   Mode    : {'LIVE' if not STRIPE_SECRET_KEY.startswith('sk_test') else 'TEST'}\n")
+        print(f"   Mode    : {mode}\n")
         return True
     except Exception as e:
         print(f"\n❌ Stripe connection failed: {e}\n")
@@ -169,9 +176,7 @@ def get_mrr_from_subscription(subscription) -> float:
     for item in items:
         price  = item.get("price", {})
         amount = price.get("unit_amount", 0) or 0
-        curr   = price.get("currency", "usd")
         interval = price.get("recurring", {}).get("interval", "month")
-        interval_count = price.get("recurring", {}).get("interval_count", 1)
 
         # Convert to monthly
         monthly = amount / 100  # Stripe amounts are in cents
@@ -204,7 +209,6 @@ def get_plan_name(subscription) -> str:
         return nickname
 
     # Otherwise derive from interval and amount
-    interval = price.get("recurring", {}).get("interval", "month")
     mrr = get_mrr_from_subscription(subscription)
 
     if mrr == 0:
@@ -409,9 +413,10 @@ def write_to_db(
 # ── Main sync function ─────────────────────────────────────────────────────────
 
 def sync_stripe(
-    company_id:  str,
+    company_id:     str,
+    stripe_key:     str = None,
     fetch_invoices: bool = True,
-    verbose:     bool = True,
+    verbose:        bool = True,
 ) -> dict:
     """
     Full Stripe → EZER sync.
@@ -419,19 +424,23 @@ def sync_stripe(
 
     Args:
         company_id:     The EZER company/tenant ID to sync data under
+        stripe_key:     Stripe secret key for this tenant. Do NOT pass None
+                        in API context — always provide the key explicitly.
         fetch_invoices: Whether to also fetch invoice/transaction history
         verbose:        Print progress
 
     Returns:
         Summary dict with counts and any errors
     """
+    stripe = get_stripe(stripe_key)
+    key_str = stripe_key or os.environ.get("STRIPE_SECRET_KEY", "")
+
     if verbose:
         print(f"\n── Stripe Sync ──────────────────────────────────────")
         print(f"  Company ID : {company_id}")
-        print(f"  Mode       : {'LIVE' if 'live' in STRIPE_SECRET_KEY else 'TEST'}")
+        print(f"  Mode       : {'LIVE' if 'live' in key_str else 'TEST'}")
         print()
 
-    stripe = get_stripe()
     errors = []
 
     # ── Step 1: Fetch customers ────────────────────────────────────────────────
@@ -564,18 +573,24 @@ def add_stripe_endpoints(app, require_auth):
     ):
         """
         Sync all Stripe customers and transactions into EZER.
-        Requires STRIPE_SECRET_KEY environment variable to be set.
+        Requires the company's Stripe secret key stored in the database.
         """
-        if not STRIPE_SECRET_KEY:
+        stripe_key = company.get("stripe_key") or ""
+        if not stripe_key:
             raise HTTPException(
                 status_code=400,
-                detail="STRIPE_SECRET_KEY not configured. Set it in your environment variables."
+                detail="Stripe secret key not configured for this account. "
+                       "Connect Stripe first via POST /connectors/stripe/connect."
             )
-        summary = sync_stripe(
-            company_id=company["company_id"],
-            fetch_invoices=req.fetch_invoices,
-            verbose=False,
-        )
+        try:
+            summary = sync_stripe(
+                company_id=company["company_id"],
+                stripe_key=stripe_key,
+                fetch_invoices=req.fetch_invoices,
+                verbose=False,
+            )
+        except Exception:
+            raise HTTPException(status_code=500, detail="Stripe sync failed")
         return summary
 
     @app.get("/connectors/stripe/status", tags=["Connectors"])
@@ -596,19 +611,21 @@ def add_stripe_endpoints(app, require_auth):
     @app.post("/connectors/stripe/test", tags=["Connectors"])
     def stripe_test(company: dict = Depends(require_auth)):
         """Test Stripe API connection."""
-        if not STRIPE_SECRET_KEY:
-            raise HTTPException(status_code=400, detail="STRIPE_SECRET_KEY not set.")
+        stripe_key = company.get("stripe_key") or ""
+        if not stripe_key:
+            raise HTTPException(status_code=400, detail="Stripe secret key not configured.")
         try:
-            stripe = get_stripe()
-            account = stripe.Account.retrieve()
+            import stripe as _stripe
+            _stripe.api_key = stripe_key
+            account = _stripe.Account.retrieve()
             return {
                 "connected": True,
                 "account_name": account.get("business_profile", {}).get("name"),
                 "country": account.get("country"),
-                "mode": "live" if "live" in STRIPE_SECRET_KEY else "test",
+                "mode": "live" if "live" in stripe_key else "test",
             }
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Stripe connection test failed")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -622,17 +639,20 @@ if __name__ == "__main__":
     parser.add_argument("--no-invoices",action="store_true", help="Skip invoice sync")
     args = parser.parse_args()
 
+    _cli_key = os.environ.get("STRIPE_SECRET_KEY", "")
+
     if args.test:
-        test_connection()
+        test_connection(_cli_key)
 
     elif args.sync:
-        if not STRIPE_SECRET_KEY:
+        if not _cli_key:
             print("❌ STRIPE_SECRET_KEY not set.")
             print("   Get your key: https://dashboard.stripe.com/apikeys")
             print("   Then: export STRIPE_SECRET_KEY=sk_live_...")
             sys.exit(1)
         sync_stripe(
             company_id=args.company_id,
+            stripe_key=_cli_key,
             fetch_invoices=not args.no_invoices,
         )
 

@@ -1,4 +1,4 @@
-name: ACIA CI
+name: EZER CI
 
 on:
   push:
@@ -52,3 +52,8 @@ jobs:
           app = create_app()
           print('✅ API imports OK')
           "
+
+      - name: Security lint
+        run: |
+          pip install bandit --quiet
+          bandit -r api.py actions/ agent/ connectors/ utils/ -ll -q || true

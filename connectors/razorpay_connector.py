@@ -4,12 +4,6 @@ EZER — Razorpay Connector
 Pulls real customer and payment data from a Razorpay account
 and maps it into EZER's database schema.
 
-Razorpay is India's most widely used payment gateway. Unlike Stripe,
-Razorpay's subscription model works slightly differently:
-  - Customers are identified by their contact (email + phone)
-  - Subscriptions have plans with billing cycles
-  - Payments are linked to orders or subscriptions
-
 What it pulls:
   - Contacts / Customers
   - Subscriptions (plan, status, MRR)
@@ -47,41 +41,40 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
-RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
-RAZORPAY_BASE_URL   = "https://api.razorpay.com/v1"
+RAZORPAY_BASE_URL = "https://api.razorpay.com/v1"
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
 
-def get_auth():
+def _get_auth(key_id: str, key_secret: str) -> tuple:
     """Return Basic auth tuple for Razorpay API."""
-    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+    if not key_id or not key_secret:
         raise ValueError(
-            "Razorpay credentials not set.\n"
-            "Run:\n"
-            "  export RAZORPAY_KEY_ID=rzp_live_xxxxx\n"
-            "  export RAZORPAY_KEY_SECRET=your_secret\n"
+            "Razorpay credentials not provided.\n"
+            "Pass key_id= and key_secret= to sync_razorpay(), or set "
+            "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET for CLI use.\n"
             "Get keys: https://dashboard.razorpay.com/app/keys"
         )
-    return (RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
+    return (key_id, key_secret)
 
 
-def razorpay_get(endpoint: str, params: dict = None) -> dict:
+def razorpay_get(endpoint: str, key_id: str, key_secret: str, params: dict = None) -> dict:
     """Make an authenticated GET request to Razorpay API."""
     url = f"{RAZORPAY_BASE_URL}/{endpoint}"
-    response = requests.get(url, auth=get_auth(), params=params or {})
+    response = requests.get(url, auth=_get_auth(key_id, key_secret), params=params or {})
     response.raise_for_status()
     return response.json()
 
 
-def test_connection() -> bool:
+def test_connection(key_id: str = None, key_secret: str = None) -> bool:
     """Test Razorpay API connection."""
+    kid    = key_id    or os.environ.get("RAZORPAY_KEY_ID", "")
+    ksecret = key_secret or os.environ.get("RAZORPAY_KEY_SECRET", "")
     try:
-        result = razorpay_get("payments", {"count": 1})
-        mode = "LIVE" if RAZORPAY_KEY_ID.startswith("rzp_live") else "TEST"
+        razorpay_get("payments", kid, ksecret, {"count": 1})
+        mode = "LIVE" if kid.startswith("rzp_live") else "TEST"
         print(f"\n✅ Razorpay connected")
-        print(f"   Key ID : {RAZORPAY_KEY_ID[:12]}...")
+        print(f"   Key ID : {kid[:12]}...")
         print(f"   Mode   : {mode}\n")
         return True
     except Exception as e:
@@ -91,18 +84,15 @@ def test_connection() -> bool:
 
 # ── Fetchers ───────────────────────────────────────────────────────────────────
 
-def fetch_all(endpoint: str, count: int = 100) -> list[dict]:
-    """
-    Fetch all records from a paginated Razorpay endpoint.
-    Razorpay uses skip/count pagination.
-    """
+def fetch_all(endpoint: str, key_id: str, key_secret: str, count: int = 100) -> list[dict]:
+    """Fetch all records from a paginated Razorpay endpoint."""
     items = []
-    skip = 0
+    skip  = 0
 
     while True:
         try:
-            result = razorpay_get(endpoint, {"count": count, "skip": skip})
-            batch = result.get("items", [])
+            result = razorpay_get(endpoint, key_id, key_secret, {"count": count, "skip": skip})
+            batch  = result.get("items", [])
             items.extend(batch)
 
             if len(batch) < count:
@@ -115,90 +105,18 @@ def fetch_all(endpoint: str, count: int = 100) -> list[dict]:
     return items
 
 
-def fetch_payments(count: int = 100) -> list[dict]:
+def fetch_payments(key_id: str, key_secret: str, count: int = 100) -> list[dict]:
     """Fetch all payments from Razorpay."""
     print("  Fetching payments from Razorpay...")
-    payments = fetch_all("payments", count)
+    payments = fetch_all("payments", key_id, key_secret, count)
     print(f"  Found {len(payments)} payments")
     return payments
 
 
-def fetch_subscriptions() -> list[dict]:
-    """Fetch all subscriptions from Razorpay."""
-    print("  Fetching subscriptions from Razorpay...")
-    subs = fetch_all("subscriptions")
-    print(f"  Found {len(subs)} subscriptions")
-    return subs
-
-
-def fetch_customers_from_contacts() -> list[dict]:
-    """
-    Fetch customers from Razorpay contacts.
-    Contacts = customers in Razorpay's terminology.
-    """
-    print("  Fetching contacts from Razorpay...")
-    contacts = fetch_all("contacts")
-    print(f"  Found {len(contacts)} contacts")
-    return contacts
-
-
 # ── Mappers ────────────────────────────────────────────────────────────────────
 
-def get_mrr_from_razorpay_subscription(sub: dict) -> float:
-    """Calculate MRR from a Razorpay subscription."""
-    if not sub or sub.get("status") not in ["active", "created", "authenticated"]:
-        return 0.0
-
-    # Razorpay amounts are in paise (1 INR = 100 paise)
-    amount = sub.get("quantity", 1) * (sub.get("plan_id") and 0 or 0)
-
-    # Try to get from plan details if embedded
-    plan = sub.get("plan", {})
-    if plan:
-        interval = plan.get("interval", 1)
-        period   = plan.get("period", "monthly")
-        amount   = plan.get("amount", 0) / 100  # paise to INR
-
-        if period == "yearly":
-            amount = amount / 12
-        elif period == "weekly":
-            amount = amount * 4.33
-        elif period == "daily":
-            amount = amount * 30
-
-    return round(amount, 2)
-
-
-def build_customer_from_payment(payment: dict) -> dict:
-    """Build a customer record from a Razorpay payment."""
-    now = datetime.now(timezone.utc).isoformat()
-
-    # Razorpay timestamps are Unix epoch
-    created_ts = payment.get("created_at", 0)
-    signup_date = datetime.fromtimestamp(
-        created_ts, tz=timezone.utc
-    ).strftime("%Y-%m-%d") if created_ts else now[:10]
-
-    email  = payment.get("email", "") or ""
-    name   = payment.get("contact", "") or email.split("@")[0] if email else "Unknown"
-    amount = payment.get("amount", 0) / 100  # paise to INR
-
-    return {
-        "email":      email,
-        "name":       name,
-        "mrr":        0.0,  # will be updated from subscription
-        "signup_date": signup_date,
-        "is_churned":  0,
-        "health_score": 65.0,
-    }
-
-
 def map_customers_from_payments(payments: list[dict], company_id: str) -> list[dict]:
-    """
-    Build unique customers from payment records.
-    Razorpay doesn't always have a separate customer list,
-    so we derive customers from their payment history.
-    """
+    """Build unique customers from payment records."""
     seen_emails = {}
     customers   = []
     now         = datetime.now(timezone.utc).isoformat()
@@ -209,7 +127,6 @@ def map_customers_from_payments(payments: list[dict], company_id: str) -> list[d
             continue
 
         if email not in seen_emails:
-            # First payment = signup
             created_ts  = payment.get("created_at", 0)
             signup_date = datetime.fromtimestamp(
                 created_ts, tz=timezone.utc
@@ -225,7 +142,7 @@ def map_customers_from_payments(payments: list[dict], company_id: str) -> list[d
                 "plan":         "Starter",
                 "mrr":          0.0,
                 "signup_date":  signup_date,
-                "country":      "IN",  # Razorpay is India-primary
+                "country":      "IN",
                 "employee_count": 0,
                 "health_score": 65.0,
                 "nps_score":    None,
@@ -233,29 +150,25 @@ def map_customers_from_payments(payments: list[dict], company_id: str) -> list[d
                 "churn_date":   None,
                 "created_at":   now,
                 "company_id":   company_id,
-                "_payments":    [],  # temp store
+                "_payments":    [],
             }
             seen_emails[email] = customer
             customers.append(customer)
 
-        # Add payment to customer's history
         seen_emails[email]["_payments"].append(payment)
 
-    # Calculate MRR and health from payment history
     for customer in customers:
         payments_hist = customer.pop("_payments", [])
         captured = [p for p in payments_hist if p.get("status") == "captured"]
         failed   = [p for p in payments_hist if p.get("status") == "failed"]
 
         if captured:
-            # Estimate MRR from last 30 days of payments
             recent = sorted(captured, key=lambda x: x.get("created_at", 0), reverse=True)
             if recent:
                 last_amount = recent[0].get("amount", 0) / 100
                 customer["mrr"] = round(last_amount, 2)
                 customer["health_score"] = 75.0
 
-        # Adjust health based on failures
         if failed and captured:
             failure_rate = len(failed) / (len(captured) + len(failed))
             if failure_rate > 0.3:
@@ -263,7 +176,6 @@ def map_customers_from_payments(payments: list[dict], company_id: str) -> list[d
             elif failure_rate > 0.1:
                 customer["health_score"] = max(50.0, customer["health_score"] - 10)
 
-        # Check for churn (no payment in 60+ days)
         if captured:
             last_payment_ts = max(p.get("created_at", 0) for p in captured)
             days_since = (datetime.now(timezone.utc).timestamp() - last_payment_ts) / 86400
@@ -285,11 +197,9 @@ def map_payment_to_transaction(
     if not payment.get("id"):
         return None
 
-    amount   = payment.get("amount", 0) / 100  # paise to INR
+    amount   = payment.get("amount", 0) / 100
     currency = payment.get("currency", "INR")
 
-    # Transaction type
-    method = payment.get("method", "")
     if payment.get("subscription_id"):
         txn_type = "subscription_renewal"
     elif payment.get("description", "").lower().find("new") >= 0:
@@ -297,17 +207,15 @@ def map_payment_to_transaction(
     else:
         txn_type = "payment"
 
-    # Status
     razorpay_status = payment.get("status", "")
     status_map = {
-        "captured":  "completed",
+        "captured":   "completed",
         "authorized": "pending",
-        "failed":    "failed",
-        "refunded":  "refunded",
+        "failed":     "failed",
+        "refunded":   "refunded",
     }
     status = status_map.get(razorpay_status, "pending")
 
-    # Date
     ts = payment.get("created_at", 0)
     txn_date = datetime.fromtimestamp(
         ts, tz=timezone.utc
@@ -344,7 +252,6 @@ def write_to_db(
     conn.execute("DELETE FROM customers WHERE company_id = ?", (company_id,))
     conn.commit()
 
-    # Insert customers
     print(f"  Writing {len(customers)} customers...")
     customer_cols = [
         "customer_id", "name", "email", "company", "industry",
@@ -365,7 +272,6 @@ def write_to_db(
     conn.executemany(sql, data)
     conn.commit()
 
-    # Insert transactions
     print(f"  Writing {len(transactions)} transactions...")
     txn_cols = [
         "txn_id", "customer_id", "amount", "currency",
@@ -391,44 +297,50 @@ def write_to_db(
 # ── Main sync ──────────────────────────────────────────────────────────────────
 
 def sync_razorpay(
-    company_id:   str,
+    company_id:          str,
+    key_id:              str = None,
+    key_secret:          str = None,
     fetch_payments_flag: bool = True,
-    verbose:      bool = True,
+    verbose:             bool = True,
 ) -> dict:
     """
     Full Razorpay → EZER sync.
-    Pulls all payments, derives customers, writes to DB.
 
     Args:
         company_id:          EZER tenant ID
+        key_id:              Razorpay Key ID for this tenant.
+        key_secret:          Razorpay Key Secret for this tenant.
         fetch_payments_flag: Whether to fetch payment history
         verbose:             Print progress
 
     Returns:
         Summary dict
     """
+    kid     = key_id     or os.environ.get("RAZORPAY_KEY_ID", "")
+    ksecret = key_secret or os.environ.get("RAZORPAY_KEY_SECRET", "")
+
+    if not kid or not ksecret:
+        raise ValueError("Razorpay credentials not provided.")
+
     if verbose:
         print(f"\n── Razorpay Sync ────────────────────────────────────")
         print(f"  Company ID : {company_id}")
-        print(f"  Mode       : {'LIVE' if 'live' in RAZORPAY_KEY_ID else 'TEST'}")
+        print(f"  Mode       : {'LIVE' if 'live' in kid else 'TEST'}")
         print()
 
     errors = []
 
-    # ── Step 1: Fetch payments ─────────────────────────────────────────────────
     if verbose:
         print("[1/3] Fetching payments from Razorpay...")
 
-    payments = fetch_payments() if fetch_payments_flag else []
+    payments = fetch_payments(kid, ksecret) if fetch_payments_flag else []
 
-    # ── Step 2: Build customers + map transactions ─────────────────────────────
     if verbose:
         print(f"\n[2/3] Building customers from {len(payments)} payments...")
 
     customers    = map_customers_from_payments(payments, company_id)
     transactions = []
 
-    # Build email → customer_id lookup
     email_to_id = {c["email"]: c["customer_id"] for c in customers}
 
     for payment in payments:
@@ -442,13 +354,11 @@ def sync_razorpay(
         except Exception as e:
             errors.append(f"Payment {payment.get('id', '?')}: {e}")
 
-    # ── Step 3: Write to DB ────────────────────────────────────────────────────
     if verbose:
         print(f"\n[3/3] Writing to database...")
 
     write_to_db(customers, transactions, company_id)
 
-    # ── Summary ────────────────────────────────────────────────────────────────
     active    = sum(1 for c in customers if not c["is_churned"])
     churned   = sum(1 for c in customers if c["is_churned"])
     total_mrr = sum(c["mrr"] for c in customers)
@@ -518,16 +428,23 @@ def add_razorpay_endpoints(app, require_auth):
         company: dict = Depends(require_auth),
     ):
         """Sync all Razorpay payments and customers into EZER."""
-        if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        key_id     = company.get("razorpay_key_id") or ""
+        key_secret = company.get("razorpay_key_secret") or ""
+        if not key_id or not key_secret:
             raise HTTPException(
                 status_code=400,
-                detail="RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET not configured."
+                detail="Razorpay credentials not configured for this account."
             )
-        return sync_razorpay(
-            company_id=company["company_id"],
-            fetch_payments_flag=req.fetch_payments,
-            verbose=False,
-        )
+        try:
+            return sync_razorpay(
+                company_id=company["company_id"],
+                key_id=key_id,
+                key_secret=key_secret,
+                fetch_payments_flag=req.fetch_payments,
+                verbose=False,
+            )
+        except Exception:
+            raise HTTPException(status_code=500, detail="Razorpay sync failed")
 
     @app.get("/connectors/razorpay/status", tags=["Connectors"])
     def razorpay_status(company: dict = Depends(require_auth)):
@@ -547,41 +464,47 @@ def add_razorpay_endpoints(app, require_auth):
     @app.post("/connectors/razorpay/test", tags=["Connectors"])
     def razorpay_test(company: dict = Depends(require_auth)):
         """Test Razorpay API connection."""
-        if not RAZORPAY_KEY_ID:
-            raise HTTPException(status_code=400, detail="RAZORPAY_KEY_ID not set.")
-        try:
-            test_connection()
-            return {
-                "connected": True,
-                "key_id": RAZORPAY_KEY_ID[:12] + "...",
-                "mode": "live" if "live" in RAZORPAY_KEY_ID else "test",
-            }
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        key_id     = company.get("razorpay_key_id") or ""
+        key_secret = company.get("razorpay_key_secret") or ""
+        if not key_id:
+            raise HTTPException(status_code=400, detail="Razorpay credentials not configured.")
+        success = test_connection(key_id, key_secret)
+        if not success:
+            raise HTTPException(status_code=400, detail="Razorpay connection test failed")
+        return {
+            "connected": True,
+            "key_id": key_id[:12] + "...",
+            "mode": "live" if "live" in key_id else "test",
+        }
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="EZER — Razorpay Connector")
-    parser.add_argument("--sync",       action="store_true", help="Sync Razorpay data to EZER")
-    parser.add_argument("--test",       action="store_true", help="Test Razorpay connection")
-    parser.add_argument("--status",     action="store_true", help="Show DB status")
-    parser.add_argument("--company-id", default="default",   help="Company/tenant ID")
-    parser.add_argument("--no-payments",action="store_true", help="Skip payment fetch")
+    parser.add_argument("--sync",        action="store_true", help="Sync Razorpay data to EZER")
+    parser.add_argument("--test",        action="store_true", help="Test Razorpay connection")
+    parser.add_argument("--status",      action="store_true", help="Show DB status")
+    parser.add_argument("--company-id",  default="default",   help="Company/tenant ID")
+    parser.add_argument("--no-payments", action="store_true", help="Skip payment fetch")
     args = parser.parse_args()
 
+    _cli_key_id     = os.environ.get("RAZORPAY_KEY_ID", "")
+    _cli_key_secret = os.environ.get("RAZORPAY_KEY_SECRET", "")
+
     if args.test:
-        test_connection()
+        test_connection(_cli_key_id, _cli_key_secret)
 
     elif args.sync:
-        if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        if not _cli_key_id or not _cli_key_secret:
             print("❌ Razorpay credentials not set.")
             print("   export RAZORPAY_KEY_ID=rzp_live_xxxxx")
             print("   export RAZORPAY_KEY_SECRET=your_secret")
             sys.exit(1)
         sync_razorpay(
             company_id=args.company_id,
+            key_id=_cli_key_id,
+            key_secret=_cli_key_secret,
             fetch_payments_flag=not args.no_payments,
         )
 

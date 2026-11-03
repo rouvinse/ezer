@@ -3,10 +3,6 @@ EZER — HubSpot Connector
 ========================
 Pulls real CRM data from HubSpot and maps it into EZER's database.
 
-HubSpot is the most widely used CRM for B2B SaaS companies globally.
-It contains the richest customer relationship data — contacts, companies,
-deals, and engagement history.
-
 What it pulls:
   - Contacts (customers — name, email, company, lifecycle stage)
   - Companies (company details, industry, employee count)
@@ -50,13 +46,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-HUBSPOT_ACCESS_TOKEN = os.environ.get("HUBSPOT_ACCESS_TOKEN", "")
-HUBSPOT_BASE_URL     = "https://api.hubapi.com"
-
-HEADERS = lambda: {
-    "Authorization": f"Bearer {HUBSPOT_ACCESS_TOKEN}",
-    "Content-Type":  "application/json",
-}
+HUBSPOT_BASE_URL = "https://api.hubapi.com"
 
 # HubSpot lifecycle stages → EZER plan/status mapping
 LIFECYCLE_TO_PLAN = {
@@ -76,39 +66,44 @@ CHURNED_STAGES = {"closedlost", "closed_lost", "churned", "cancelled"}
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
 
-def check_token():
-    if not HUBSPOT_ACCESS_TOKEN:
+def _make_headers(access_token: str) -> dict:
+    """Build authenticated headers for HubSpot API."""
+    if not access_token:
         raise ValueError(
-            "HUBSPOT_ACCESS_TOKEN not set.\n"
-            "Create a Private App at: app.hubspot.com/private-apps\n"
-            "Then: export HUBSPOT_ACCESS_TOKEN=pat-na1-xxxxx"
+            "HubSpot access token not provided.\n"
+            "Pass access_token= to sync_hubspot(), or set HUBSPOT_ACCESS_TOKEN "
+            "in your environment for CLI use.\n"
+            "Create a Private App at: app.hubspot.com/private-apps"
         )
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type":  "application/json",
+    }
 
 
-def hubspot_get(endpoint: str, params: dict = None) -> dict:
+def hubspot_get(endpoint: str, access_token: str, params: dict = None) -> dict:
     """Make an authenticated GET request to HubSpot API."""
-    check_token()
     url = f"{HUBSPOT_BASE_URL}/{endpoint}"
-    response = requests.get(url, headers=HEADERS(), params=params or {})
+    response = requests.get(url, headers=_make_headers(access_token), params=params or {})
     response.raise_for_status()
     return response.json()
 
 
-def hubspot_post(endpoint: str, payload: dict) -> dict:
+def hubspot_post(endpoint: str, access_token: str, payload: dict) -> dict:
     """Make an authenticated POST request to HubSpot API."""
-    check_token()
     url = f"{HUBSPOT_BASE_URL}/{endpoint}"
-    response = requests.post(url, headers=HEADERS(), json=payload)
+    response = requests.post(url, headers=_make_headers(access_token), json=payload)
     response.raise_for_status()
     return response.json()
 
 
-def test_connection() -> bool:
+def test_connection(access_token: str = None) -> bool:
     """Test HubSpot connection."""
+    token = access_token or os.environ.get("HUBSPOT_ACCESS_TOKEN", "")
     try:
-        result = hubspot_get("crm/v3/objects/contacts", {"limit": 1})
+        result = hubspot_get("crm/v3/objects/contacts", token, {"limit": 1})
         print(f"\n✅ HubSpot connected")
-        print(f"   Token  : {HUBSPOT_ACCESS_TOKEN[:15]}...")
+        print(f"   Token  : {token[:15]}...")
         print(f"   Contacts found (sample): {result.get('total', 'unknown')}\n")
         return True
     except Exception as e:
@@ -118,7 +113,7 @@ def test_connection() -> bool:
 
 # ── Fetchers ───────────────────────────────────────────────────────────────────
 
-def fetch_contacts(properties: list[str] = None) -> list[dict]:
+def fetch_contacts(access_token: str, properties: list[str] = None) -> list[dict]:
     """Fetch all contacts from HubSpot with pagination."""
     default_props = [
         "firstname", "lastname", "email", "company",
@@ -141,7 +136,7 @@ def fetch_contacts(properties: list[str] = None) -> list[dict]:
         if after:
             params["after"] = after
 
-        result = hubspot_get("crm/v3/objects/contacts", params)
+        result = hubspot_get("crm/v3/objects/contacts", access_token, params)
         batch  = result.get("results", [])
         contacts.extend(batch)
 
@@ -154,7 +149,7 @@ def fetch_contacts(properties: list[str] = None) -> list[dict]:
     return contacts
 
 
-def fetch_companies() -> dict[str, dict]:
+def fetch_companies(access_token: str) -> dict[str, dict]:
     """Fetch all companies, return dict keyed by company ID."""
     companies = {}
     after     = None
@@ -166,7 +161,7 @@ def fetch_companies() -> dict[str, dict]:
         if after:
             params["after"] = after
 
-        result = hubspot_get("crm/v3/objects/companies", params)
+        result = hubspot_get("crm/v3/objects/companies", access_token, params)
         for company in result.get("results", []):
             companies[company["id"]] = company.get("properties", {})
 
@@ -179,7 +174,7 @@ def fetch_companies() -> dict[str, dict]:
     return companies
 
 
-def fetch_deals() -> list[dict]:
+def fetch_deals(access_token: str) -> list[dict]:
     """Fetch all deals from HubSpot."""
     deals = []
     after = None
@@ -191,7 +186,7 @@ def fetch_deals() -> list[dict]:
         if after:
             params["after"] = after
 
-        result = hubspot_get("crm/v3/objects/deals", params)
+        result = hubspot_get("crm/v3/objects/deals", access_token, params)
         deals.extend(result.get("results", []))
 
         paging = result.get("paging", {})
@@ -201,18 +196,6 @@ def fetch_deals() -> list[dict]:
 
     print(f"  Found {len(deals)} deals")
     return deals
-
-
-def fetch_email_events(contact_id: str) -> list[dict]:
-    """Fetch email engagement events for a contact."""
-    try:
-        result = hubspot_get(
-            f"email/public/v1/subscriptions/{contact_id}/timeline",
-            {"limit": 50}
-        )
-        return result.get("timeline", [])
-    except Exception:
-        return []
 
 
 # ── Mappers ────────────────────────────────────────────────────────────────────
@@ -226,29 +209,22 @@ def map_contact_to_customer(
     props = contact.get("properties", {})
     now   = datetime.now(timezone.utc).isoformat()
 
-    # Name
     first = props.get("firstname", "") or ""
     last  = props.get("lastname",  "") or ""
     name  = f"{first} {last}".strip() or props.get("email", "Unknown").split("@")[0]
 
-    # Email
-    email = props.get("email", "") or ""
-
-    # Company
+    email        = props.get("email", "") or ""
     company_name = props.get("company", "") or ""
 
-    # Plan from lifecycle stage
     lifecycle = props.get("lifecyclestage", "lead") or "lead"
     plan      = LIFECYCLE_TO_PLAN.get(lifecycle.lower(), "Starter")
 
-    # Churn detection
     is_churned = 0
     churn_date = None
     lead_status = props.get("hs_lead_status", "") or ""
     if lead_status.lower() in {"churned", "cancelled", "unqualified", "lost"}:
         is_churned = 1
 
-    # Signup date
     created_str = props.get("createdate", "") or ""
     try:
         signup_date = datetime.fromisoformat(
@@ -257,7 +233,6 @@ def map_contact_to_customer(
     except Exception:
         signup_date = now[:10]
 
-    # Health score from engagement signals
     health_score  = 60.0
     emails_opened = int(props.get("hs_email_open", 0) or 0)
     emails_clicked= int(props.get("hs_email_click", 0) or 0)
@@ -288,7 +263,6 @@ def map_contact_to_customer(
 
     health_score = max(0.0, min(100.0, health_score))
 
-    # Employee count from associated company
     employee_count = 0
     industry       = "Unknown"
     country        = "Unknown"
@@ -311,7 +285,7 @@ def map_contact_to_customer(
         "company":       company_name[:200] or name,
         "industry":      industry[:100],
         "plan":          plan,
-        "mrr":           0.0,  # Updated from deals
+        "mrr":           0.0,
         "signup_date":   signup_date,
         "country":       country[:100],
         "employee_count": employee_count,
@@ -337,7 +311,6 @@ def map_deal_to_transaction(
     amount = float(props.get("amount", 0) or 0)
     stage  = props.get("dealstage", "") or ""
 
-    # Status
     if stage.lower() in {"closedwon", "closed_won"}:
         status   = "completed"
         txn_type = "subscription_new"
@@ -348,7 +321,6 @@ def map_deal_to_transaction(
         status   = "pending"
         txn_type = "payment"
 
-    # Date
     close_str = props.get("closedate", "") or props.get("createdate", "") or ""
     try:
         txn_date = datetime.fromisoformat(
@@ -371,45 +343,6 @@ def map_deal_to_transaction(
     }
 
 
-def map_engagement_event(
-    event:       dict,
-    customer_id: str,
-    company_id:  str,
-) -> dict | None:
-    """Map a HubSpot engagement to EZER's engagement_events schema."""
-    event_type = event.get("type", "").lower()
-
-    type_map = {
-        "email":    "email_open",
-        "call":     "call",
-        "meeting":  "meeting",
-        "note":     "note",
-        "task":     "task",
-        "linkedin_message": "linkedin",
-    }
-
-    ezer_type = type_map.get(event_type, "other")
-    ts        = event.get("occurredAt", "") or event.get("createdAt", "")
-
-    try:
-        event_date = datetime.fromisoformat(
-            ts.replace("Z", "+00:00")
-        ).strftime("%Y-%m-%d") if ts else datetime.now().strftime("%Y-%m-%d")
-    except Exception:
-        event_date = datetime.now().strftime("%Y-%m-%d")
-
-    return {
-        "event_id":       str(uuid.uuid4()),
-        "customer_id":    customer_id,
-        "event_type":     ezer_type,
-        "channel":        "hubspot",
-        "session_duration": 0,
-        "event_date":     event_date,
-        "metadata":       event_type,
-        "company_id":     company_id,
-    }
-
-
 # ── DB writer ──────────────────────────────────────────────────────────────────
 
 def write_to_db(
@@ -427,7 +360,6 @@ def write_to_db(
     conn.execute("DELETE FROM customers WHERE company_id=?", (company_id,))
     conn.commit()
 
-    # Customers
     customer_cols = [
         "customer_id", "name", "email", "company", "industry",
         "plan", "mrr", "signup_date", "country", "employee_count",
@@ -446,7 +378,6 @@ def write_to_db(
     conn.executemany(sql, data)
     conn.commit()
 
-    # Transactions
     txn_cols = ["txn_id","customer_id","amount","currency","txn_type","product_id","status","txn_date","company_id"]
     print(f"  Writing {len(transactions)} transactions...")
     if transactions:
@@ -467,14 +398,25 @@ def write_to_db(
 # ── Main sync ──────────────────────────────────────────────────────────────────
 
 def sync_hubspot(
-    company_id:    str,
+    company_id:       str,
+    access_token:     str = None,
     fetch_deals_flag: bool = True,
-    verbose:       bool = True,
+    verbose:          bool = True,
 ) -> dict:
     """
     Full HubSpot → EZER sync.
-    Pulls contacts, companies, deals and maps to EZER schema.
+
+    Args:
+        company_id:       EZER tenant ID
+        access_token:     HubSpot Private App token for this tenant.
+                          Do NOT pass None in API context.
+        fetch_deals_flag: Whether to also sync deal transactions
+        verbose:          Print progress
     """
+    token = access_token or os.environ.get("HUBSPOT_ACCESS_TOKEN", "")
+    if not token:
+        raise ValueError("HubSpot access token not provided.")
+
     if verbose:
         print(f"\n── HubSpot Sync ─────────────────────────────────────")
         print(f"  Company ID : {company_id}")
@@ -482,15 +424,13 @@ def sync_hubspot(
 
     errors = []
 
-    # ── Step 1: Fetch data ─────────────────────────────────────────────────────
     if verbose:
         print("[1/4] Fetching data from HubSpot...")
 
-    contacts  = fetch_contacts()
-    companies = fetch_companies()
-    deals     = fetch_deals() if fetch_deals_flag else []
+    contacts  = fetch_contacts(token)
+    companies = fetch_companies(token)
+    deals     = fetch_deals(token) if fetch_deals_flag else []
 
-    # ── Step 2: Map customers ──────────────────────────────────────────────────
     if verbose:
         print(f"\n[2/4] Mapping {len(contacts)} contacts to customers...")
 
@@ -502,31 +442,19 @@ def sync_hubspot(
         except Exception as e:
             errors.append(f"Contact {contact.get('id','?')}: {e}")
 
-    # ── Step 3: Map deals to transactions + update MRR ─────────────────────────
     if verbose:
         print(f"\n[3/4] Mapping {len(deals)} deals to transactions...")
-
-    # Build email → customer lookup
-    email_to_customer = {c["email"]: c for c in customers if c["email"]}
 
     transactions = []
     for deal in deals:
         try:
             txn = map_deal_to_transaction(deal, "", company_id)
             if txn and txn["status"] == "completed":
-                # Try to associate with a customer
-                # HubSpot deals don't always have contact email directly
-                # We'll link them in a future version with associations API
                 txn["customer_id"] = customers[0]["customer_id"] if customers else str(uuid.uuid4())
                 transactions.append(txn)
-
-                # Update customer MRR from closed-won deals
-                # Distribute MRR across active customers evenly as a starting point
-                # This improves significantly once you fetch deal associations
         except Exception as e:
             errors.append(f"Deal {deal.get('id','?')}: {e}")
 
-    # Estimate MRR from closed deals divided across active customers
     if transactions and customers:
         total_deal_value = sum(t["amount"] for t in transactions)
         active_customers = [c for c in customers if not c["is_churned"]]
@@ -535,13 +463,11 @@ def sync_hubspot(
             for customer in active_customers:
                 customer["mrr"] = avg_mrr
 
-    # ── Step 4: Write to DB ────────────────────────────────────────────────────
     if verbose:
         print(f"\n[4/4] Writing to database...")
 
     write_to_db(customers, transactions, company_id)
 
-    # ── Summary ────────────────────────────────────────────────────────────────
     active    = sum(1 for c in customers if not c["is_churned"])
     churned   = sum(1 for c in customers if c["is_churned"])
     total_mrr = sum(c["mrr"] for c in customers)
@@ -600,9 +526,18 @@ def add_hubspot_endpoints(app, require_auth):
     @app.post("/connectors/hubspot/sync", tags=["Connectors"])
     def hubspot_sync(req: HubSpotConnectorSyncRequest, company: dict = Depends(require_auth)):
         """Sync all HubSpot contacts and deals into EZER."""
-        if not HUBSPOT_ACCESS_TOKEN:
-            raise HTTPException(status_code=400, detail="HUBSPOT_ACCESS_TOKEN not configured.")
-        return sync_hubspot(company_id=company["company_id"], fetch_deals_flag=req.fetch_deals, verbose=False)
+        access_token = company.get("hubspot_token") or ""
+        if not access_token:
+            raise HTTPException(status_code=400, detail="HubSpot access token not configured for this account.")
+        try:
+            return sync_hubspot(
+                company_id=company["company_id"],
+                access_token=access_token,
+                fetch_deals_flag=req.fetch_deals,
+                verbose=False,
+            )
+        except Exception:
+            raise HTTPException(status_code=500, detail="HubSpot sync failed")
 
     @app.get("/connectors/hubspot/status", tags=["Connectors"])
     def hubspot_status(company: dict = Depends(require_auth)):
@@ -622,12 +557,13 @@ def add_hubspot_endpoints(app, require_auth):
     @app.post("/connectors/hubspot/test", tags=["Connectors"])
     def hubspot_test(company: dict = Depends(require_auth)):
         """Test HubSpot API connection."""
-        if not HUBSPOT_ACCESS_TOKEN:
-            raise HTTPException(status_code=400, detail="HUBSPOT_ACCESS_TOKEN not set.")
-        success = test_connection()
+        access_token = company.get("hubspot_token") or ""
+        if not access_token:
+            raise HTTPException(status_code=400, detail="HubSpot access token not configured.")
+        success = test_connection(access_token)
         if not success:
-            raise HTTPException(status_code=400, detail="HubSpot connection failed.")
-        return {"connected": True, "token": HUBSPOT_ACCESS_TOKEN[:12] + "..."}
+            raise HTTPException(status_code=400, detail="HubSpot connection failed")
+        return {"connected": True, "token": access_token[:12] + "..."}
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -641,15 +577,21 @@ if __name__ == "__main__":
     parser.add_argument("--no-deals",   action="store_true", help="Skip deal sync")
     args = parser.parse_args()
 
+    _cli_token = os.environ.get("HUBSPOT_ACCESS_TOKEN", "")
+
     if args.test:
-        test_connection()
+        test_connection(_cli_token)
     elif args.sync:
-        if not HUBSPOT_ACCESS_TOKEN:
+        if not _cli_token:
             print("❌ HUBSPOT_ACCESS_TOKEN not set.")
             print("   Create a Private App: app.hubspot.com/private-apps")
             print("   Then: export HUBSPOT_ACCESS_TOKEN=pat-na1-xxxxx")
             sys.exit(1)
-        sync_hubspot(company_id=args.company_id, fetch_deals_flag=not args.no_deals)
+        sync_hubspot(
+            company_id=args.company_id,
+            access_token=_cli_token,
+            fetch_deals_flag=not args.no_deals,
+        )
     elif args.status:
         show_status(args.company_id)
     else:

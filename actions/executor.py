@@ -3,6 +3,15 @@ ACIA — Action Executor
 Pulls pending actions from the queue, builds personalised content,
 simulates execution (email send / CSM task / support call), and
 writes outcomes back to the DB as the feedback signal.
+
+SEC-NEW-002 FIX: All DB queries are now scoped by company_id so that
+one tenant's action executor cannot read or write another tenant's rows.
+Changes:
+  - execute_batch() now takes company_id and filters agent_actions by it
+  - _load_context() filters customers, ml_predictions, and the feature
+    sub-query by company_id
+  - email_log INSERT now includes company_id column
+  - UPDATE agent_actions also filters by company_id for extra safety
 """
 
 from __future__ import annotations
@@ -33,40 +42,40 @@ OUTCOME_PROFILES: dict[str, dict] = {
     "send_retention_email": {
         "success_rate": 0.42,
         "outcomes": {
-            "opened_clicked":   0.35,
-            "opened_only":      0.25,
-            "discount_redeemed":0.15,
-            "unsubscribed":     0.05,
-            "bounced":          0.03,
-            "no_response":      0.17,
+            "opened_clicked":    0.35,
+            "opened_only":       0.25,
+            "discount_redeemed": 0.15,
+            "unsubscribed":      0.05,
+            "bounced":           0.03,
+            "no_response":       0.17,
         },
     },
     "send_reengagement_email": {
         "success_rate": 0.31,
         "outcomes": {
-            "logged_in":        0.28,
-            "opened_only":      0.22,
-            "no_response":      0.45,
-            "unsubscribed":     0.05,
+            "logged_in":    0.28,
+            "opened_only":  0.22,
+            "no_response":  0.45,
+            "unsubscribed": 0.05,
         },
     },
     "send_upgrade_offer": {
         "success_rate": 0.28,
         "outcomes": {
-            "upgraded":         0.18,
+            "upgraded":              0.18,
             "clicked_not_converted": 0.22,
-            "opened_only":      0.28,
-            "no_response":      0.30,
-            "unsubscribed":     0.02,
+            "opened_only":           0.28,
+            "no_response":           0.30,
+            "unsubscribed":          0.02,
         },
     },
     "send_loyalty_reward": {
         "success_rate": 0.70,
         "outcomes": {
-            "reward_claimed":   0.55,
-            "opened_only":      0.25,
-            "no_response":      0.18,
-            "unsubscribed":     0.02,
+            "reward_claimed": 0.55,
+            "opened_only":    0.25,
+            "no_response":    0.18,
+            "unsubscribed":   0.02,
         },
     },
     "send_health_checkin": {
@@ -90,10 +99,10 @@ OUTCOME_PROFILES: dict[str, dict] = {
     "proactive_support_call": {
         "success_rate": 0.58,
         "outcomes": {
-            "issue_resolved":   0.45,
-            "escalated_csm":    0.08,
-            "no_answer":        0.28,
-            "callback_scheduled":0.19,
+            "issue_resolved":     0.45,
+            "escalated_csm":      0.08,
+            "no_answer":          0.28,
+            "callback_scheduled": 0.19,
         },
     },
     "enroll_nurture_sequence": {
@@ -145,27 +154,43 @@ class ExecutionResult:
 
 # ── Core executor ─────────────────────────────────────────────────────────────
 
-def _load_context(customer_ids: list[str]) -> tuple[dict, dict]:
-    """Fetch customer features + ML predictions for a batch of customers."""
+def _load_context(
+    customer_ids: list[str],
+    company_id:   str,
+) -> tuple[dict, dict]:
+    """
+    Fetch customer features + ML predictions for a batch of customers.
+
+    SEC-NEW-002: company_id is now required and applied to every query so
+    one tenant's executor cannot read another tenant's customer rows or
+    predictions.
+    """
     conn = get_connection()
     placeholders = ",".join("?" * len(customer_ids))
 
-    cid = get_tenant().company_id
+    # ── customers — scoped by company_id ─────────────────────────────────────
     cust_rows = conn.execute(
-        f"SELECT * FROM customers WHERE customer_id IN ({placeholders}) AND company_id=?",
-        customer_ids + [cid]
+        f"SELECT * FROM customers "
+        f"WHERE customer_id IN ({placeholders}) AND company_id=?",
+        customer_ids + [company_id]
     ).fetchall()
-    cust_cols = [d[0] for d in conn.execute("SELECT * FROM customers LIMIT 0").description]
-    customers = {r[0]: dict(zip(cust_cols, r)) for r in cust_rows}
+    cust_cols  = [d[0] for d in conn.execute("SELECT * FROM customers LIMIT 0").description]
+    customers  = {r[0]: dict(zip(cust_cols, r)) for r in cust_rows}
 
+    # ── ml_predictions — scoped by company_id ────────────────────────────────
+    # ml_predictions may not have a company_id column in every schema version;
+    # we join through customers to enforce scoping.
     pred_rows = conn.execute(
-        f"SELECT * FROM ml_predictions WHERE customer_id IN ({placeholders})",
-        customer_ids
+        f"""SELECT p.* FROM ml_predictions p
+            JOIN customers c ON c.customer_id = p.customer_id
+            WHERE p.customer_id IN ({placeholders})
+              AND c.company_id = ?""",
+        customer_ids + [company_id]
     ).fetchall()
-    pred_cols = [d[0] for d in conn.execute("SELECT * FROM ml_predictions LIMIT 0").description]
-    predictions = {r[1]: dict(zip(pred_cols, r)) for r in pred_rows}
+    pred_cols    = [d[0] for d in conn.execute("SELECT * FROM ml_predictions LIMIT 0").description]
+    predictions  = {r[1]: dict(zip(pred_cols, r)) for r in pred_rows}
 
-    # Also pull feature-derived fields we need for templates
+    # ── feature-derived fields — scoped by company_id ────────────────────────
     feat_rows = conn.execute(
         f"""SELECT c.customer_id,
                CAST(julianday('now') - julianday(MAX(e.event_date)) AS INTEGER) AS days_since_last_event,
@@ -173,11 +198,16 @@ def _load_context(customer_ids: list[str]) -> tuple[dict, dict]:
                AVG(t.sentiment_score) AS avg_sentiment,
                CAST(julianday('now') - julianday(c.signup_date) AS INTEGER) AS tenure_days
             FROM customers c
-            LEFT JOIN engagement_events e ON e.customer_id = c.customer_id
-            LEFT JOIN support_tickets t   ON t.customer_id = c.customer_id AND t.status = 'open'
+            LEFT JOIN engagement_events e
+                   ON e.customer_id = c.customer_id AND e.company_id = ?
+            LEFT JOIN support_tickets t
+                   ON t.customer_id = c.customer_id
+                  AND t.status = 'open'
+                  AND t.company_id = ?
             WHERE c.customer_id IN ({placeholders})
+              AND c.company_id = ?
             GROUP BY c.customer_id""",
-        customer_ids
+        [company_id, company_id] + customer_ids + [company_id]
     ).fetchall()
     for row in feat_rows:
         cid = row[0]
@@ -192,21 +222,32 @@ def _load_context(customer_ids: list[str]) -> tuple[dict, dict]:
 
 
 def execute_batch(
-    limit:    int  = 50,
-    dry_run:  bool = False,
-    verbose:  bool = True,
+    limit:      int  = 50,
+    dry_run:    bool = False,
+    verbose:    bool = True,
+    company_id: str  = None,
 ) -> list[ExecutionResult]:
     """
-    Pull up to `limit` pending actions, execute them, write outcomes to DB.
+    Pull up to `limit` pending actions for this tenant, execute them,
+    write outcomes to DB.
+
+    SEC-NEW-002: company_id is required for all DB reads and writes.
+    When not supplied as a parameter it falls back to get_tenant().company_id
+    (the tenant set for this request context by the API middleware).
+
     dry_run=True: build templates and simulate but don't write to DB.
     """
-    conn   = get_connection()
-    rows   = conn.execute(
-        "SELECT * FROM agent_actions WHERE status='pending' "
+    cid  = company_id or get_tenant().company_id
+    conn = get_connection()
+
+    # ── Load pending actions scoped to THIS tenant only ───────────────────────
+    rows = conn.execute(
+        "SELECT * FROM agent_actions "
+        "WHERE status='pending' AND company_id=? "
         "ORDER BY priority DESC, created_at ASC LIMIT ?",
-        (limit,)
+        (cid, limit)
     ).fetchall()
-    cols   = [d[0] for d in conn.execute("SELECT * FROM agent_actions LIMIT 0").description]
+    cols    = [d[0] for d in conn.execute("SELECT * FROM agent_actions LIMIT 0").description]
     actions = [dict(zip(cols, r)) for r in rows]
     conn.close()
 
@@ -215,27 +256,30 @@ def execute_batch(
             print("  No pending actions in queue.")
         return []
 
-    # Batch-load customer context
+    # Batch-load customer context — scoped by company_id
     cust_ids = list({a["customer_id"] for a in actions})
-    customers, predictions = _load_context(cust_ids)
+    customers, predictions = _load_context(cust_ids, cid)
 
     results: list[ExecutionResult] = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for action in actions:
-        cid      = action["customer_id"]
-        customer = customers.get(cid, {"customer_id": cid, "name": cid,
-                                       "plan": "Unknown", "mrr": 0})
-        pred     = predictions.get(cid, {})
+        customer_id = action["customer_id"]
+        customer    = customers.get(customer_id, {
+            "customer_id": customer_id,
+            "name":        customer_id,
+            "plan":        "Unknown",
+            "mrr":         0,
+        })
+        pred = predictions.get(customer_id, {})
 
         # Build personalised template
         template = build_template(action, customer, pred)
 
         # ── Execute action ────────────────────────────────────────────────────
         if template.channel == "email" and not dry_run:
-            # Real email via SendGrid
-            to_email = customer.get("email", f"{cid.lower()}@example.com")
-            to_name  = customer.get("name", cid)
+            to_email = customer.get("email", f"{customer_id.lower()}@example.com")
+            to_name  = customer.get("name", customer_id)
 
             email_result = send_email(
                 to_email=to_email,
@@ -243,7 +287,7 @@ def execute_batch(
                 subject=template.subject,
                 body=template.body,
                 action_type=action["action_type"],
-                customer_id=cid,
+                customer_id=customer_id,
             )
 
             if email_result.success:
@@ -252,14 +296,12 @@ def execute_batch(
             else:
                 outcome_label  = "email_failed"
                 outcome_status = "failure"
-
         else:
-            # Non-email actions (CSM tasks, support calls) — simulate outcome
             outcome_label, outcome_status = _simulate_outcome(action["action_type"])
 
         result = ExecutionResult(
             action_id=action["action_id"],
-            customer_id=cid,
+            customer_id=customer_id,
             action_type=action["action_type"],
             template=template,
             outcome=outcome_label,
@@ -268,23 +310,32 @@ def execute_batch(
         )
         results.append(result)
 
-        # Write outcome to DB
+        # ── Write outcome to DB — scoped by company_id ────────────────────────
         if not dry_run:
             conn = get_connection()
             conn.execute(
-                "UPDATE agent_actions SET status='executed', outcome=?, executed_at=? "
-                "WHERE action_id=?",
-                (outcome_label, now, action["action_id"])
+                "UPDATE agent_actions "
+                "SET status='executed', outcome=?, executed_at=? "
+                "WHERE action_id=? AND company_id=?",
+                (outcome_label, now, action["action_id"], cid)
             )
-            # Log to email_log if it's an email action
             if template.channel == "email":
                 opened  = 1 if outcome_label in ("email_sent", "dry_run_sent") else 0
                 clicked = 0  # real click tracking comes from SendGrid webhooks
                 conn.execute(
-                    "INSERT INTO email_log (email_id, customer_id, email_type, subject, opened, clicked, sent_at) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (f"ACIA-{action['action_id'][:8]}", cid, action["action_type"],
-                     template.subject, opened, clicked, now)
+                    "INSERT INTO email_log "
+                    "(email_id, customer_id, email_type, subject, opened, clicked, sent_at, company_id) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        f"ACIA-{action['action_id'][:8]}",
+                        customer_id,
+                        action["action_type"],
+                        template.subject,
+                        opened,
+                        clicked,
+                        now,
+                        cid,            # SEC-NEW-002: tenant-scope the log row
+                    )
                 )
             conn.commit()
             conn.close()
@@ -298,7 +349,7 @@ def print_execution_report(results: list[ExecutionResult], verbose: bool = True)
     if not results:
         return
 
-    total    = len(results)
+    total     = len(results)
     by_status = {"success": 0, "failure": 0, "neutral": 0}
     by_action: dict[str, dict] = {}
     email_results: list[ExecutionResult] = []

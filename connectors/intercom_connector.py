@@ -4,10 +4,6 @@ EZER — Intercom Connector
 Pulls customer conversation and engagement data from Intercom
 and maps it into EZER's database schema.
 
-Intercom is the most widely used customer messaging platform in B2B SaaS.
-It contains the richest support and engagement signals — conversations,
-user activity, events, and sentiment data.
-
 What it pulls:
   - Contacts (customers — name, email, company, last seen)
   - Conversations (support tickets — topic, sentiment, status)
@@ -45,35 +41,38 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-INTERCOM_ACCESS_TOKEN = os.environ.get("INTERCOM_ACCESS_TOKEN", "")
-INTERCOM_BASE_URL     = "https://api.intercom.io"
+INTERCOM_BASE_URL = "https://api.intercom.io"
 
-def get_headers():
-    if not INTERCOM_ACCESS_TOKEN:
+
+def _make_headers(access_token: str) -> dict:
+    """Build authenticated headers for Intercom API."""
+    if not access_token:
         raise ValueError(
-            "INTERCOM_ACCESS_TOKEN not set.\n"
-            "Get it from: app.intercom.com → Settings → Integrations → Developer Hub\n"
-            "Then: export INTERCOM_ACCESS_TOKEN=dG9rOj..."
+            "Intercom access token not provided.\n"
+            "Pass access_token= to sync_intercom(), or set INTERCOM_ACCESS_TOKEN "
+            "in your environment for CLI use.\n"
+            "Get it from: app.intercom.com → Settings → Integrations → Developer Hub"
         )
     return {
-        "Authorization": f"Bearer {INTERCOM_ACCESS_TOKEN}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
+        "Authorization":    f"Bearer {access_token}",
+        "Accept":           "application/json",
+        "Content-Type":     "application/json",
         "Intercom-Version": "2.10",
     }
 
 
 # ── Connection ─────────────────────────────────────────────────────────────────
 
-def test_connection() -> bool:
+def test_connection(access_token: str = None) -> bool:
     """Test Intercom API connection."""
+    token = access_token or os.environ.get("INTERCOM_ACCESS_TOKEN", "")
     try:
-        response = requests.get(f"{INTERCOM_BASE_URL}/me", headers=get_headers())
+        response = requests.get(f"{INTERCOM_BASE_URL}/me", headers=_make_headers(token))
         response.raise_for_status()
         data = response.json()
         print(f"\n✅ Intercom connected")
         print(f"   App     : {data.get('app', {}).get('name', 'Unknown')}")
-        print(f"   Token   : {INTERCOM_ACCESS_TOKEN[:15]}...\n")
+        print(f"   Token   : {token[:15]}...\n")
         return True
     except Exception as e:
         print(f"\n❌ Intercom connection failed: {e}\n")
@@ -82,23 +81,23 @@ def test_connection() -> bool:
 
 # ── Fetchers ───────────────────────────────────────────────────────────────────
 
-def intercom_get(endpoint: str, params: dict = None) -> dict:
+def intercom_get(endpoint: str, access_token: str, params: dict = None) -> dict:
     """Make authenticated GET request to Intercom."""
     url = f"{INTERCOM_BASE_URL}/{endpoint}"
-    response = requests.get(url, headers=get_headers(), params=params or {})
+    response = requests.get(url, headers=_make_headers(access_token), params=params or {})
     response.raise_for_status()
     return response.json()
 
 
-def intercom_post(endpoint: str, payload: dict) -> dict:
+def intercom_post(endpoint: str, access_token: str, payload: dict) -> dict:
     """Make authenticated POST request to Intercom (for search)."""
     url = f"{INTERCOM_BASE_URL}/{endpoint}"
-    response = requests.post(url, headers=get_headers(), json=payload)
+    response = requests.post(url, headers=_make_headers(access_token), json=payload)
     response.raise_for_status()
     return response.json()
 
 
-def fetch_contacts(limit: int = 150) -> list[dict]:
+def fetch_contacts(access_token: str, limit: int = 150) -> list[dict]:
     """Fetch all contacts from Intercom with pagination."""
     contacts = []
     starting_after = None
@@ -109,7 +108,7 @@ def fetch_contacts(limit: int = 150) -> list[dict]:
         if starting_after:
             params["starting_after"] = starting_after
 
-        result = intercom_get("contacts", params)
+        result = intercom_get("contacts", access_token, params)
         batch  = result.get("data", [])
         contacts.extend(batch)
 
@@ -124,7 +123,7 @@ def fetch_contacts(limit: int = 150) -> list[dict]:
     return contacts
 
 
-def fetch_conversations(limit: int = 150) -> list[dict]:
+def fetch_conversations(access_token: str, limit: int = 150) -> list[dict]:
     """Fetch all conversations from Intercom."""
     conversations = []
     starting_after = None
@@ -135,7 +134,7 @@ def fetch_conversations(limit: int = 150) -> list[dict]:
         if starting_after:
             params["starting_after"] = starting_after
 
-        result = intercom_get("conversations", params)
+        result = intercom_get("conversations", access_token, params)
         batch  = result.get("conversations", [])
         conversations.extend(batch)
 
@@ -150,10 +149,10 @@ def fetch_conversations(limit: int = 150) -> list[dict]:
     return conversations
 
 
-def fetch_events_for_contact(contact_id: str) -> list[dict]:
+def fetch_events_for_contact(contact_id: str, access_token: str) -> list[dict]:
     """Fetch events for a specific contact."""
     try:
-        result = intercom_get("events", {
+        result = intercom_get("events", access_token, {
             "type": "user",
             "intercom_user_id": contact_id,
             "per_page": 50,
@@ -208,13 +207,11 @@ def map_contact_to_customer(
     """Map an Intercom contact to EZER's customer schema."""
     now = datetime.now(timezone.utc).isoformat()
 
-    # Name
     name  = contact.get("name") or ""
     email = contact.get("email") or ""
     if not name:
         name = email.split("@")[0] if email else "Unknown"
 
-    # Company
     company_data = contact.get("companies", {}).get("data", [])
     company_name = ""
     industry     = "Unknown"
@@ -228,17 +225,14 @@ def map_contact_to_customer(
         employee_count = first_company.get("size", 0) or 0
         mrr           = float(first_company.get("monthly_spend", 0) or 0)
 
-    # Plan from custom attributes or tags
     custom_attrs = contact.get("custom_attributes", {}) or {}
     plan = custom_attrs.get("plan") or custom_attrs.get("subscription_plan") or "Starter"
 
-    # Signup date
     created_at = contact.get("created_at", 0) or 0
     signup_date = datetime.fromtimestamp(
         created_at, tz=timezone.utc
     ).strftime("%Y-%m-%d") if created_at else now[:10]
 
-    # Last seen — used for health score
     last_seen_at = contact.get("last_seen_at", 0) or 0
     health_score = 60.0
 
@@ -255,11 +249,9 @@ def map_contact_to_customer(
         else:
             health_score = 20.0
 
-    # Churn detection
     is_churned = 0
     churn_date = None
-    unsubscribed = contact.get("unsubscribed_from_emails", False)
-    archived     = contact.get("archived", False)
+    archived   = contact.get("archived", False)
 
     if archived or (last_seen_at and (datetime.now(timezone.utc).timestamp() - last_seen_at) / 86400 > 90):
         is_churned = 1
@@ -297,22 +289,19 @@ def map_conversation_to_ticket(
     if not conversation.get("id"):
         return None
 
-    # Topic from first message
     source       = conversation.get("source", {}) or {}
     first_msg    = source.get("body", "") or ""
     topic        = first_msg[:100] if first_msg else "General inquiry"
 
-    # Status mapping
     state = conversation.get("state", "open")
     status_map = {
-        "open":     "open",
-        "closed":   "resolved",
-        "snoozed":  "pending",
+        "open":    "open",
+        "closed":  "resolved",
+        "snoozed": "pending",
     }
     status = status_map.get(state, "open")
 
-    # Priority from tags
-    tags     = conversation.get("tags", {}).get("tags", [])
+    tags      = conversation.get("tags", {}).get("tags", [])
     tag_names = [t.get("name", "").lower() for t in tags]
     if any(t in tag_names for t in ["urgent", "critical", "p0", "p1"]):
         priority = "high"
@@ -321,10 +310,8 @@ def map_conversation_to_ticket(
     else:
         priority = "medium"
 
-    # Sentiment from conversation body
     sentiment_score = analyze_sentiment(first_msg)
 
-    # Dates
     created_ts  = conversation.get("created_at", 0) or 0
     updated_ts  = conversation.get("updated_at", 0) or 0
     opened_at   = datetime.fromtimestamp(created_ts, tz=timezone.utc).strftime(
@@ -358,7 +345,6 @@ def map_event_to_engagement(
     if not event_name:
         return None
 
-    # Map common Intercom event names to EZER types
     if any(x in event_name.lower() for x in ["login", "signin", "sign_in", "session"]):
         event_type = "login"
     elif any(x in event_name.lower() for x in ["feature", "click", "use", "action"]):
@@ -390,10 +376,10 @@ def map_event_to_engagement(
 # ── DB writer ──────────────────────────────────────────────────────────────────
 
 def write_to_db(
-    customers:    list[dict],
-    tickets:      list[dict],
-    events:       list[dict],
-    company_id:   str,
+    customers:  list[dict],
+    tickets:    list[dict],
+    events:     list[dict],
+    company_id: str,
 ):
     """Write Intercom data to EZER database."""
     from utils.db import get_connection, DB_ENGINE
@@ -406,7 +392,6 @@ def write_to_db(
     conn.execute("DELETE FROM customers WHERE company_id=?", (company_id,))
     conn.commit()
 
-    # Customers
     customer_cols = [
         "customer_id", "name", "email", "company", "industry",
         "plan", "mrr", "signup_date", "country", "employee_count",
@@ -425,7 +410,6 @@ def write_to_db(
     conn.executemany(sql, data)
     conn.commit()
 
-    # Support tickets
     ticket_cols = [
         "ticket_id", "customer_id", "topic", "status",
         "priority", "sentiment_score", "opened_at", "resolved_at", "company_id"
@@ -443,7 +427,6 @@ def write_to_db(
         conn.executemany(sql, data)
         conn.commit()
 
-    # Engagement events
     event_cols = [
         "event_id", "customer_id", "event_type", "channel",
         "session_duration", "event_date", "metadata", "company_id"
@@ -467,14 +450,25 @@ def write_to_db(
 # ── Main sync ──────────────────────────────────────────────────────────────────
 
 def sync_intercom(
-    company_id:       str,
+    company_id:        str,
+    access_token:      str = None,
     fetch_events_flag: bool = False,
-    verbose:          bool = True,
+    verbose:           bool = True,
 ) -> dict:
     """
     Full Intercom → EZER sync.
-    Pulls contacts, conversations, and optionally events.
+
+    Args:
+        company_id:        EZER tenant ID
+        access_token:      Intercom access token for this tenant.
+                           Do NOT pass None in API context.
+        fetch_events_flag: Whether to also pull per-contact events
+        verbose:           Print progress
     """
+    token = access_token or os.environ.get("INTERCOM_ACCESS_TOKEN", "")
+    if not token:
+        raise ValueError("Intercom access token not provided.")
+
     if verbose:
         print(f"\n── Intercom Sync ────────────────────────────────────")
         print(f"  Company ID : {company_id}")
@@ -482,14 +476,12 @@ def sync_intercom(
 
     errors = []
 
-    # ── Step 1: Fetch data ─────────────────────────────────────────────────────
     if verbose:
         print("[1/4] Fetching data from Intercom...")
 
-    contacts      = fetch_contacts()
-    conversations = fetch_conversations()
+    contacts      = fetch_contacts(token)
+    conversations = fetch_conversations(token)
 
-    # ── Step 2: Map contacts ───────────────────────────────────────────────────
     if verbose:
         print(f"\n[2/4] Mapping {len(contacts)} contacts to customers...")
 
@@ -504,14 +496,12 @@ def sync_intercom(
         except Exception as e:
             errors.append(f"Contact {contact.get('id','?')}: {e}")
 
-    # ── Step 3: Map conversations to tickets ───────────────────────────────────
     if verbose:
         print(f"\n[3/4] Mapping {len(conversations)} conversations to tickets...")
 
     tickets = []
     for conv in conversations:
         try:
-            # Find associated contact
             contacts_list = conv.get("contacts", {}).get("contacts", [])
             customer_id = None
 
@@ -531,14 +521,13 @@ def sync_intercom(
         except Exception as e:
             errors.append(f"Conversation {conv.get('id','?')}: {e}")
 
-    # ── Step 4: Fetch and map events (optional) ────────────────────────────────
     events = []
     if fetch_events_flag:
         if verbose:
             print(f"\n[4/4] Fetching events for {len(customers[:50])} customers...")
-        for customer in customers[:50]:  # Limit to first 50 to avoid rate limits
+        for customer in customers[:50]:
             try:
-                raw_events = fetch_events_for_contact(customer["intercom_id"])
+                raw_events = fetch_events_for_contact(customer["intercom_id"], token)
                 for event in raw_events:
                     mapped = map_event_to_engagement(event, customer["customer_id"], company_id)
                     if mapped:
@@ -549,13 +538,11 @@ def sync_intercom(
         if verbose:
             print(f"\n[4/4] Skipping events (use --events flag to enable)")
 
-    # ── Write to DB ────────────────────────────────────────────────────────────
     if verbose:
         print(f"\nWriting to database...")
 
     write_to_db(customers, tickets, events, company_id)
 
-    # ── Summary ────────────────────────────────────────────────────────────────
     active    = sum(1 for c in customers if not c["is_churned"])
     churned   = sum(1 for c in customers if c["is_churned"])
     total_mrr = sum(c["mrr"] for c in customers)
@@ -601,6 +588,59 @@ def show_status(company_id: str):
     conn.close()
 
 
+# ── API endpoints ──────────────────────────────────────────────────────────────
+
+def add_intercom_endpoints(app, require_auth):
+    """Add Intercom connector endpoints to FastAPI app."""
+    from fastapi import Depends, HTTPException
+    from pydantic import BaseModel
+
+    class IntercomSyncRequest(BaseModel):
+        fetch_events: bool = False
+
+    @app.post("/connectors/intercom/sync", tags=["Connectors"])
+    def intercom_sync(req: IntercomSyncRequest, company: dict = Depends(require_auth)):
+        """Sync all Intercom contacts and conversations into EZER."""
+        access_token = company.get("intercom_token") or ""
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Intercom access token not configured for this account.")
+        try:
+            return sync_intercom(
+                company_id=company["company_id"],
+                access_token=access_token,
+                fetch_events_flag=req.fetch_events,
+                verbose=False,
+            )
+        except Exception:
+            raise HTTPException(status_code=500, detail="Intercom sync failed")
+
+    @app.get("/connectors/intercom/status", tags=["Connectors"])
+    def intercom_status(company: dict = Depends(require_auth)):
+        """Show current Intercom data in EZER database."""
+        from utils.db import get_connection
+        conn = get_connection()
+        cid  = company["company_id"]
+        result = {
+            "customers": conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=?", (cid,)).fetchone()[0],
+            "active":    conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=? AND is_churned=0", (cid,)).fetchone()[0],
+            "tickets":   conn.execute("SELECT COUNT(*) FROM support_tickets WHERE company_id=?", (cid,)).fetchone()[0],
+            "events":    conn.execute("SELECT COUNT(*) FROM engagement_events WHERE company_id=?", (cid,)).fetchone()[0],
+        }
+        conn.close()
+        return result
+
+    @app.post("/connectors/intercom/test", tags=["Connectors"])
+    def intercom_test(company: dict = Depends(require_auth)):
+        """Test Intercom API connection."""
+        access_token = company.get("intercom_token") or ""
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Intercom access token not configured.")
+        success = test_connection(access_token)
+        if not success:
+            raise HTTPException(status_code=400, detail="Intercom connection test failed")
+        return {"connected": True, "token": access_token[:15] + "..."}
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -612,15 +652,21 @@ if __name__ == "__main__":
     parser.add_argument("--company-id", default="default",   help="Company/tenant ID")
     args = parser.parse_args()
 
+    _cli_token = os.environ.get("INTERCOM_ACCESS_TOKEN", "")
+
     if args.test:
-        test_connection()
+        test_connection(_cli_token)
     elif args.sync:
-        if not INTERCOM_ACCESS_TOKEN:
+        if not _cli_token:
             print("❌ INTERCOM_ACCESS_TOKEN not set.")
             print("   Get it: app.intercom.com → Settings → Integrations → Developer Hub")
             print("   Then: export INTERCOM_ACCESS_TOKEN=dG9rOj...")
             sys.exit(1)
-        sync_intercom(company_id=args.company_id, fetch_events_flag=args.events)
+        sync_intercom(
+            company_id=args.company_id,
+            access_token=_cli_token,
+            fetch_events_flag=args.events,
+        )
     elif args.status:
         show_status(args.company_id)
     else:

@@ -1,0 +1,68 @@
+# EZER — Root .gitignore
+# =========================================================
+# IMPORTANT: This file must live at the repo root, not inside
+# deployment/. GitHub only reads .gitignore from the root.
+
+# ── Secrets — NEVER commit these ─────────────────────────
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+secrets/
+
+# ── Database files ────────────────────────────────────────
+data/acia.db
+data/*.db
+*.sqlite
+*.sqlite3
+
+# ── Trained ML models (regenerate with python main.py --setup)
+models/artifacts/
+*.pkl
+*.joblib
+*.h5
+
+# ── Python ───────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ──────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── IDE ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Test coverage ─────────────────────────────────────────
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ── Node (dashboard) ──────────────────────────────────────
+node_modules/
+.next/
+dist/
+
+# ── Railway / deployment ──────────────────────────────────
+.railway/

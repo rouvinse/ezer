@@ -55,99 +55,97 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# ── Config ─────────────────────────────────────────────────────────────────────
-
-SF_USERNAME       = os.environ.get("SALESFORCE_USERNAME", "")
-SF_PASSWORD       = os.environ.get("SALESFORCE_PASSWORD", "")
-SF_SECURITY_TOKEN = os.environ.get("SALESFORCE_SECURITY_TOKEN", "")
-SF_CLIENT_ID      = os.environ.get("SALESFORCE_CLIENT_ID", "")
-SF_CLIENT_SECRET  = os.environ.get("SALESFORCE_CLIENT_SECRET", "")
-SF_DOMAIN         = os.environ.get("SALESFORCE_DOMAIN", "login")
-
-# Auth state (set after login)
-_sf_access_token  = None
-_sf_instance_url  = None
-
-
 # ── Authentication ─────────────────────────────────────────────────────────────
+#
+# SEC-NEW-003 FIX: All module-level SF_* credential constants and the global
+# _sf_access_token / _sf_instance_url state have been removed.  Every function
+# now receives credentials as explicit arguments so that:
+#   • No tenant's credentials can bleed into a concurrent request for another
+#     tenant through shared process memory.
+#   • The sync functions are safe to call from multi-threaded / async contexts.
+#   • authenticate() returns the (access_token, instance_url) pair locally;
+#     callers are responsible for passing those values downstream.
 
-def authenticate() -> tuple[str, str]:
+
+def authenticate(
+    username:       str,
+    password:       str,
+    security_token: str,
+    client_id:      str = "",
+    client_secret:  str = "",
+    domain:         str = "login",
+) -> tuple[str, str]:
     """
     Authenticate with Salesforce and return (access_token, instance_url).
+
+    Credentials are accepted as explicit arguments — no os.environ reads here.
+    The API endpoint calls authenticate() with values read from the company
+    record; the CLI calls it with values from env vars.
+
     Supports both Username/Password and Connected App OAuth flows.
     """
-    global _sf_access_token, _sf_instance_url
-
-    if _sf_access_token and _sf_instance_url:
-        return _sf_access_token, _sf_instance_url
-
-    if not SF_USERNAME or not SF_PASSWORD:
+    if not username or not password:
         raise ValueError(
-            "Salesforce credentials not set.\n"
-            "Set these environment variables:\n"
-            "  SALESFORCE_USERNAME=you@company.com\n"
-            "  SALESFORCE_PASSWORD=yourpassword\n"
-            "  SALESFORCE_SECURITY_TOKEN=yourtoken\n"
-            "Get your security token: Salesforce → Settings → Reset My Security Token"
+            "Salesforce credentials not provided.\n"
+            "Ensure the company record has salesforce_username, salesforce_password,\n"
+            "and salesforce_security_token set.\n"
+            "For CLI use set SALESFORCE_USERNAME / SALESFORCE_PASSWORD / SALESFORCE_SECURITY_TOKEN."
         )
 
     # Build auth payload
-    if SF_CLIENT_ID and SF_CLIENT_SECRET:
-        # Connected App OAuth
+    if client_id and client_secret:
+        # Connected App OAuth flow
         payload = {
             "grant_type":    "password",
-            "client_id":     SF_CLIENT_ID,
-            "client_secret": SF_CLIENT_SECRET,
-            "username":      SF_USERNAME,
-            "password":      SF_PASSWORD + SF_SECURITY_TOKEN,
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "username":      username,
+            "password":      password + security_token,
         }
     else:
-        # Username/Password flow
+        # Username/Password flow (no Connected App needed)
         payload = {
-            "grant_type": "password",
-            "client_id":  "3MVG9pe2TCkV1DedT5uGI10K1J9XrYXX9EBiD9R5n1_",  # Default Salesforce client
+            "grant_type":    "password",
+            "client_id":     "3MVG9pe2TCkV1DedT5uGI10K1J9XrYXX9EBiD9R5n1_",
             "client_secret": "",
-            "username":   SF_USERNAME,
-            "password":   SF_PASSWORD + SF_SECURITY_TOKEN,
+            "username":      username,
+            "password":      password + security_token,
         }
 
-    login_url = f"https://{SF_DOMAIN}.salesforce.com/services/oauth2/token"
+    login_url = f"https://{domain}.salesforce.com/services/oauth2/token"
     response  = requests.post(login_url, data=payload)
 
     if response.status_code != 200:
+        error_desc = response.json().get("error_description", response.text)
         raise ValueError(
-            f"Salesforce authentication failed: {response.json().get('error_description', response.text)}\n"
-            "Check your username, password, and security token."
+            f"Salesforce authentication failed: {error_desc}\n"
+            "Check username, password, and security token."
         )
 
-    data               = response.json()
-    _sf_access_token   = data["access_token"]
-    _sf_instance_url   = data["instance_url"]
-
-    return _sf_access_token, _sf_instance_url
+    data = response.json()
+    return data["access_token"], data["instance_url"]
 
 
-def sf_get_headers() -> dict:
-    """Get authenticated headers for Salesforce API."""
-    token, _ = authenticate()
+def sf_get_headers(access_token: str) -> dict:
+    """Build authenticated headers for Salesforce API."""
     return {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {access_token}",
         "Content-Type":  "application/json",
     }
 
 
-def sf_query(soql: str) -> list[dict]:
+def sf_query(soql: str, access_token: str, instance_url: str) -> list[dict]:
     """
     Execute a SOQL query and return all records with pagination.
-    SOQL is Salesforce's SQL-like query language.
+
+    Credentials are passed explicitly — no cached globals used.
     """
-    _, instance_url = authenticate()
     url     = f"{instance_url}/services/data/v58.0/query"
     records = []
     params  = {"q": soql}
 
     while True:
-        response = requests.get(url, headers=sf_get_headers(), params=params)
+        response = requests.get(url, headers=sf_get_headers(access_token), params=params)
         response.raise_for_status()
         data = response.json()
 
@@ -156,27 +154,45 @@ def sf_query(soql: str) -> list[dict]:
         if data.get("done", True):
             break
 
-        # Next page
         next_url = data.get("nextRecordsUrl", "")
         if not next_url:
             break
 
-        _, instance_url = authenticate()
         url    = f"{instance_url}{next_url}"
         params = {}
 
     return records
 
 
-def test_connection() -> bool:
-    """Test Salesforce connection."""
+def test_connection(
+    username:       str = None,
+    password:       str = None,
+    security_token: str = None,
+    client_id:      str = "",
+    client_secret:  str = "",
+    domain:         str = "login",
+) -> bool:
+    """Test Salesforce connection. Falls back to env vars for CLI use."""
+    _username       = username       or os.environ.get("SALESFORCE_USERNAME", "")
+    _password       = password       or os.environ.get("SALESFORCE_PASSWORD", "")
+    _security_token = security_token or os.environ.get("SALESFORCE_SECURITY_TOKEN", "")
+    _client_id      = client_id      or os.environ.get("SALESFORCE_CLIENT_ID", "")
+    _client_secret  = client_secret  or os.environ.get("SALESFORCE_CLIENT_SECRET", "")
+    _domain         = domain         or os.environ.get("SALESFORCE_DOMAIN", "login")
+
     try:
-        token, instance_url = authenticate()
-        # Quick test query
-        records = sf_query("SELECT Id, Name FROM Account LIMIT 1")
+        token, instance_url = authenticate(
+            username=_username,
+            password=_password,
+            security_token=_security_token,
+            client_id=_client_id,
+            client_secret=_client_secret,
+            domain=_domain,
+        )
+        records = sf_query("SELECT Id, Name FROM Account LIMIT 1", token, instance_url)
         print(f"\n✅ Salesforce connected")
         print(f"   Instance : {instance_url}")
-        print(f"   User     : {SF_USERNAME}")
+        print(f"   User     : {_username}")
         print(f"   Test     : Found {len(records)} account(s)\n")
         return True
     except Exception as e:
@@ -186,7 +202,7 @@ def test_connection() -> bool:
 
 # ── Fetchers ───────────────────────────────────────────────────────────────────
 
-def fetch_accounts() -> list[dict]:
+def fetch_accounts(access_token: str, instance_url: str) -> list[dict]:
     """Fetch all Account records from Salesforce."""
     print("  Fetching accounts from Salesforce...")
     soql = """
@@ -198,12 +214,12 @@ def fetch_accounts() -> list[dict]:
         WHERE IsDeleted = false
         ORDER BY LastModifiedDate DESC
     """
-    records = sf_query(soql)
+    records = sf_query(soql, access_token, instance_url)
     print(f"  Found {len(records)} accounts")
     return records
 
 
-def fetch_contacts() -> list[dict]:
+def fetch_contacts(access_token: str, instance_url: str) -> list[dict]:
     """Fetch all Contact records from Salesforce."""
     print("  Fetching contacts from Salesforce...")
     soql = """
@@ -214,12 +230,12 @@ def fetch_contacts() -> list[dict]:
         WHERE IsDeleted = false
         ORDER BY CreatedDate DESC
     """
-    records = sf_query(soql)
+    records = sf_query(soql, access_token, instance_url)
     print(f"  Found {len(records)} contacts")
     return records
 
 
-def fetch_opportunities() -> list[dict]:
+def fetch_opportunities(access_token: str, instance_url: str) -> list[dict]:
     """Fetch all Opportunity records from Salesforce."""
     print("  Fetching opportunities from Salesforce...")
     soql = """
@@ -230,23 +246,26 @@ def fetch_opportunities() -> list[dict]:
         WHERE IsDeleted = false
         ORDER BY CloseDate DESC
     """
-    records = sf_query(soql)
+    records = sf_query(soql, access_token, instance_url)
     print(f"  Found {len(records)} opportunities")
     return records
 
 
-def fetch_activities(account_ids: list[str]) -> list[dict]:
+def fetch_activities(
+    account_ids: list[str],
+    access_token: str,
+    instance_url: str,
+) -> list[dict]:
     """Fetch recent activities (tasks and events) for accounts."""
     if not account_ids:
         return []
 
     print("  Fetching activities from Salesforce...")
-    # Batch by 200 IDs max per query
     all_activities = []
     for i in range(0, len(account_ids), 200):
-        batch = account_ids[i:i+200]
+        batch   = account_ids[i:i+200]
         ids_str = "', '".join(batch)
-        soql = f"""
+        soql    = f"""
             SELECT Id, WhatId, Subject, Status, ActivityDate,
                    Description, Type, CreatedDate
             FROM Task
@@ -256,7 +275,7 @@ def fetch_activities(account_ids: list[str]) -> list[dict]:
             LIMIT 1000
         """
         try:
-            records = sf_query(soql)
+            records = sf_query(soql, access_token, instance_url)
             all_activities.extend(records)
         except Exception as e:
             print(f"  Warning: activity fetch error: {e}")
@@ -297,7 +316,6 @@ def calculate_health_score(account: dict, opportunities: list[dict]) -> float:
     """Calculate customer health score from Salesforce signals."""
     health = 60.0
 
-    # Last activity recency
     last_activity = account.get("LastActivityDate")
     if last_activity:
         try:
@@ -316,8 +334,7 @@ def calculate_health_score(account: dict, opportunities: list[dict]) -> float:
         except Exception:
             pass
 
-    # Won opportunities = healthy signal
-    won = [o for o in opportunities if o.get("IsWon")]
+    won  = [o for o in opportunities if o.get("IsWon")]
     lost = [o for o in opportunities if o.get("IsClosed") and not o.get("IsWon")]
 
     if won:
@@ -336,21 +353,19 @@ def map_account_to_customer(
     """Map a Salesforce Account to EZER's customer schema."""
     now = datetime.now(timezone.utc).isoformat()
 
-    account_id    = account.get("Id", "")
-    name          = account.get("Name", "Unknown") or "Unknown"
-    industry      = account.get("Industry", "Unknown") or "Unknown"
-    annual_rev    = float(account.get("AnnualRevenue", 0) or 0)
-    mrr           = round(annual_rev / 12, 2)
-    employees     = int(account.get("NumberOfEmployees", 0) or 0)
-    country       = account.get("BillingCountry", "Unknown") or "Unknown"
-    plan          = get_plan_from_revenue(annual_rev)
-    signup_date   = parse_sf_date(account.get("CreatedDate", ""))
+    account_id = account.get("Id", "")
+    name       = account.get("Name", "Unknown") or "Unknown"
+    industry   = account.get("Industry", "Unknown") or "Unknown"
+    annual_rev = float(account.get("AnnualRevenue", 0) or 0)
+    mrr        = round(annual_rev / 12, 2)
+    employees  = int(account.get("NumberOfEmployees", 0) or 0)
+    country    = account.get("BillingCountry", "Unknown") or "Unknown"
+    plan       = get_plan_from_revenue(annual_rev)
+    signup_date = parse_sf_date(account.get("CreatedDate", ""))
 
-    # Get opportunities for this account
     acct_opps = opps_by_acct.get(account_id, [])
     health    = calculate_health_score(account, acct_opps)
 
-    # Churn detection — closed lost opportunities or no activity in 180 days
     is_churned = 0
     churn_date = None
     last_activity = account.get("LastActivityDate")
@@ -397,7 +412,6 @@ def map_opportunity_to_transaction(
         return None
 
     amount = float(opp.get("Amount", 0) or 0)
-    stage  = opp.get("StageName", "") or ""
     is_won = opp.get("IsWon", False)
 
     if is_won:
@@ -413,16 +427,16 @@ def map_opportunity_to_transaction(
     close_date = parse_sf_date(opp.get("CloseDate", ""))
 
     return {
-        "txn_id":         str(uuid.uuid4()),
-        "salesforce_id":  opp.get("Id", ""),
-        "customer_id":    customer_id,
-        "amount":         amount,
-        "currency":       "USD",
-        "txn_type":       txn_type,
-        "product_id":     opp.get("Type", "") or "",
-        "status":         status,
-        "txn_date":       close_date,
-        "company_id":     company_id,
+        "txn_id":        str(uuid.uuid4()),
+        "salesforce_id": opp.get("Id", ""),
+        "customer_id":   customer_id,
+        "amount":        amount,
+        "currency":      "USD",
+        "txn_type":      txn_type,
+        "product_id":    opp.get("Type", "") or "",
+        "status":        status,
+        "txn_date":      close_date,
+        "company_id":    company_id,
     }
 
 
@@ -436,27 +450,26 @@ def map_activity_to_engagement(
     atype   = activity.get("Type", "") or ""
 
     type_map = {
-        "Call":     "call",
-        "Email":    "email_open",
-        "Meeting":  "meeting",
-        "Task":     "task",
-        "Other":    "other",
+        "Call":    "call",
+        "Email":   "email_open",
+        "Meeting": "meeting",
+        "Task":    "task",
+        "Other":   "other",
     }
-    event_type = type_map.get(atype, "other")
-
+    event_type    = type_map.get(atype, "other")
     activity_date = parse_sf_date(
         activity.get("ActivityDate") or activity.get("CreatedDate", "")
     )
 
     return {
-        "event_id":        str(uuid.uuid4()),
-        "customer_id":     customer_id,
-        "event_type":      event_type,
-        "channel":         "salesforce",
+        "event_id":         str(uuid.uuid4()),
+        "customer_id":      customer_id,
+        "event_type":       event_type,
+        "channel":          "salesforce",
         "session_duration": 0,
-        "event_date":      activity_date,
-        "metadata":        subject[:100],
-        "company_id":      company_id,
+        "event_date":       activity_date,
+        "metadata":         subject[:100],
+        "company_id":       company_id,
     }
 
 
@@ -523,45 +536,86 @@ def write_to_db(
 # ── Main sync ──────────────────────────────────────────────────────────────────
 
 def sync_salesforce(
-    company_id:          str,
+    company_id:            str,
+    username:              str = None,
+    password:              str = None,
+    security_token:        str = None,
+    client_id:             str = "",
+    client_secret:         str = "",
+    domain:                str = "login",
     fetch_activities_flag: bool = True,
-    verbose:             bool = True,
+    verbose:               bool = True,
 ) -> dict:
-    """Full Salesforce → EZER sync."""
+    """
+    Full Salesforce → EZER sync.
+
+    Args:
+        company_id:            EZER tenant ID
+        username:              Salesforce login email
+        password:              Salesforce password
+        security_token:        Salesforce security token
+        client_id:             Connected App consumer key (optional)
+        client_secret:         Connected App consumer secret (optional)
+        domain:                Login domain — "login" or custom sandbox
+        fetch_activities_flag: Also pull Task/Event activity records
+        verbose:               Print progress
+
+    SEC-NEW-003: No os.environ reads here. Caller passes explicit credentials.
+    The API endpoint reads them from the authenticated company record;
+    the CLI reads them from env vars and passes them in.
+    """
+    _username       = username       or os.environ.get("SALESFORCE_USERNAME", "")
+    _password       = password       or os.environ.get("SALESFORCE_PASSWORD", "")
+    _security_token = security_token or os.environ.get("SALESFORCE_SECURITY_TOKEN", "")
+    _client_id      = client_id      or os.environ.get("SALESFORCE_CLIENT_ID", "")
+    _client_secret  = client_secret  or os.environ.get("SALESFORCE_CLIENT_SECRET", "")
+    _domain         = domain         or os.environ.get("SALESFORCE_DOMAIN", "login")
+
     if verbose:
         print(f"\n── Salesforce Sync ──────────────────────────────────")
         print(f"  Company ID : {company_id}")
-        print(f"  User       : {SF_USERNAME}")
+        print(f"  User       : {_username}")
         print()
 
     errors = []
 
-    # ── Step 1: Fetch ──────────────────────────────────────────────────────────
+    # ── Step 1: Authenticate — obtain local tokens, no globals ─────────────────
     if verbose:
-        print("[1/4] Fetching data from Salesforce...")
+        print("[1/4] Authenticating with Salesforce...")
 
-    accounts      = fetch_accounts()
-    opportunities = fetch_opportunities()
+    access_token, instance_url = authenticate(
+        username=_username,
+        password=_password,
+        security_token=_security_token,
+        client_id=_client_id,
+        client_secret=_client_secret,
+        domain=_domain,
+    )
+
+    # ── Step 2: Fetch ──────────────────────────────────────────────────────────
+    if verbose:
+        print("[2/4] Fetching data from Salesforce...")
+
+    accounts      = fetch_accounts(access_token, instance_url)
+    opportunities = fetch_opportunities(access_token, instance_url)
 
     activities = []
     if fetch_activities_flag:
         account_ids = [a.get("Id") for a in accounts if a.get("Id")]
-        activities  = fetch_activities(account_ids)
+        activities  = fetch_activities(account_ids, access_token, instance_url)
 
-    # ── Step 2: Build lookup maps ──────────────────────────────────────────────
+    # ── Step 3: Map accounts → customers ───────────────────────────────────────
     if verbose:
-        print(f"\n[2/4] Mapping {len(accounts)} accounts to customers...")
+        print(f"\n[3/4] Mapping {len(accounts)} accounts to customers...")
 
-    # Group opportunities by account ID
     opps_by_acct = {}
     for opp in opportunities:
         acct_id = opp.get("AccountId", "")
         if acct_id:
             opps_by_acct.setdefault(acct_id, []).append(opp)
 
-    # ── Step 3: Map accounts to customers ──────────────────────────────────────
-    customers = []
-    sf_to_customer_id = {}
+    customers          = []
+    sf_to_customer_id  = {}
 
     for account in accounts:
         try:
@@ -573,7 +627,7 @@ def sync_salesforce(
 
     # ── Step 4: Map opportunities and activities ────────────────────────────────
     if verbose:
-        print(f"\n[3/4] Mapping {len(opportunities)} opportunities and {len(activities)} activities...")
+        print(f"\n[4/4] Mapping {len(opportunities)} opportunities and {len(activities)} activities...")
 
     transactions = []
     for opp in opportunities:
@@ -601,11 +655,10 @@ def sync_salesforce(
 
     # ── Write to DB ────────────────────────────────────────────────────────────
     if verbose:
-        print(f"\n[4/4] Writing to database...")
+        print(f"\nWriting to database...")
 
     write_to_db(customers, transactions, events, company_id)
 
-    # ── Summary ────────────────────────────────────────────────────────────────
     active    = sum(1 for c in customers if not c["is_churned"])
     churned   = sum(1 for c in customers if c["is_churned"])
     total_mrr = sum(c["mrr"] for c in customers)
@@ -654,6 +707,82 @@ def show_status(company_id: str):
     conn.close()
 
 
+# ── API endpoints ──────────────────────────────────────────────────────────────
+
+def add_salesforce_endpoints(app, require_auth):
+    """Add Salesforce connector endpoints to FastAPI app."""
+    from fastapi import Depends, HTTPException
+    from pydantic import BaseModel
+
+    class SalesforceSyncRequest(BaseModel):
+        fetch_activities: bool = True
+
+    @app.post("/connectors/salesforce/sync", tags=["Connectors"])
+    def salesforce_sync(req: SalesforceSyncRequest, company: dict = Depends(require_auth)):
+        """Sync all Salesforce accounts and opportunities into EZER."""
+        _username  = company.get("salesforce_username") or ""
+        _password  = company.get("salesforce_password") or ""
+        _token     = company.get("salesforce_security_token") or ""
+        _client_id = company.get("salesforce_client_id") or ""
+        _client_secret = company.get("salesforce_client_secret") or ""
+        _domain    = company.get("salesforce_domain") or "login"
+
+        if not _username or not _password:
+            raise HTTPException(
+                status_code=400,
+                detail="Salesforce credentials not configured for this account.",
+            )
+        try:
+            return sync_salesforce(
+                company_id=company["company_id"],
+                username=_username,
+                password=_password,
+                security_token=_token,
+                client_id=_client_id,
+                client_secret=_client_secret,
+                domain=_domain,
+                fetch_activities_flag=req.fetch_activities,
+                verbose=False,
+            )
+        except Exception:
+            raise HTTPException(status_code=500, detail="Salesforce sync failed")
+
+    @app.get("/connectors/salesforce/status", tags=["Connectors"])
+    def salesforce_status(company: dict = Depends(require_auth)):
+        """Show current Salesforce data in EZER database."""
+        from utils.db import get_connection
+        conn = get_connection()
+        cid  = company["company_id"]
+        result = {
+            "customers":    conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=?", (cid,)).fetchone()[0],
+            "active":       conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=? AND is_churned=0", (cid,)).fetchone()[0],
+            "transactions": conn.execute("SELECT COUNT(*) FROM transactions WHERE company_id=?", (cid,)).fetchone()[0],
+            "events":       conn.execute("SELECT COUNT(*) FROM engagement_events WHERE company_id=?", (cid,)).fetchone()[0],
+        }
+        conn.close()
+        return result
+
+    @app.post("/connectors/salesforce/test", tags=["Connectors"])
+    def salesforce_test(company: dict = Depends(require_auth)):
+        """Test Salesforce API connection."""
+        _username = company.get("salesforce_username") or ""
+        _password = company.get("salesforce_password") or ""
+        _token    = company.get("salesforce_security_token") or ""
+        _domain   = company.get("salesforce_domain") or "login"
+
+        if not _username or not _password:
+            raise HTTPException(status_code=400, detail="Salesforce credentials not configured.")
+        success = test_connection(
+            username=_username,
+            password=_password,
+            security_token=_token,
+            domain=_domain,
+        )
+        if not success:
+            raise HTTPException(status_code=400, detail="Salesforce connection test failed")
+        return {"connected": True, "username": _username}
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -665,10 +794,26 @@ if __name__ == "__main__":
     parser.add_argument("--company-id",    default="default",   help="Company/tenant ID")
     args = parser.parse_args()
 
+    # CLI reads credentials from env vars and passes them explicitly — consistent
+    # with how the API endpoints pass them from the company record.
+    _cli_username       = os.environ.get("SALESFORCE_USERNAME", "")
+    _cli_password       = os.environ.get("SALESFORCE_PASSWORD", "")
+    _cli_security_token = os.environ.get("SALESFORCE_SECURITY_TOKEN", "")
+    _cli_client_id      = os.environ.get("SALESFORCE_CLIENT_ID", "")
+    _cli_client_secret  = os.environ.get("SALESFORCE_CLIENT_SECRET", "")
+    _cli_domain         = os.environ.get("SALESFORCE_DOMAIN", "login")
+
     if args.test:
-        test_connection()
+        test_connection(
+            username=_cli_username,
+            password=_cli_password,
+            security_token=_cli_security_token,
+            client_id=_cli_client_id,
+            client_secret=_cli_client_secret,
+            domain=_cli_domain,
+        )
     elif args.sync:
-        if not SF_USERNAME or not SF_PASSWORD:
+        if not _cli_username or not _cli_password:
             print("❌ Salesforce credentials not set.")
             print("   export SALESFORCE_USERNAME=you@company.com")
             print("   export SALESFORCE_PASSWORD=yourpassword")
@@ -676,6 +821,12 @@ if __name__ == "__main__":
             sys.exit(1)
         sync_salesforce(
             company_id=args.company_id,
+            username=_cli_username,
+            password=_cli_password,
+            security_token=_cli_security_token,
+            client_id=_cli_client_id,
+            client_secret=_cli_client_secret,
+            domain=_cli_domain,
             fetch_activities_flag=not args.no_activities,
         )
     elif args.status:
