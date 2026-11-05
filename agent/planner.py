@@ -11,16 +11,20 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import requests
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from collections import defaultdict
+from utils.network_security import validate_trusted_https_url
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.rules import ActionCandidate
 
 DB_PATH = Path(__file__).parent.parent / "data" / "acia.db"
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+TRUSTED_ANTHROPIC_HOSTS = {"api.anthropic.com"}
 
 
 # ── Planned Action (output of planner) ───────────────────────────────────────
@@ -98,22 +102,25 @@ Decide the single best action for this customer."""
 def _call_claude(prompt: str, retries: int = 2) -> dict | None:
     """Call Claude API and parse JSON response."""
     try:
-        import urllib.request
-        payload = json.dumps({
+        payload = {
             "model": "claude-sonnet-4-20250514",
             "max_tokens": 1000,
             "system": SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": prompt}]
-        }).encode()
-
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST"
+        }
+        validate_trusted_https_url(
+            ANTHROPIC_API_URL,
+            allowed_hosts=TRUSTED_ANTHROPIC_HOSTS,
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
-            data = json.loads(resp.read())
+        resp = requests.post(
+            ANTHROPIC_API_URL,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+            allow_redirects=False,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
         text = "".join(
             block.get("text", "") for block in data.get("content", [])

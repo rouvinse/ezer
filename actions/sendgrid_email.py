@@ -20,11 +20,10 @@ SendGrid docs: https://docs.sendgrid.com/api-reference/mail-send/mail-send
 from __future__ import annotations
 import os
 import json
-import urllib.request
-import urllib.error
+import requests
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from utils.network_security import validate_trusted_https_url
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +31,7 @@ SENDGRID_API_URL   = "https://api.sendgrid.com/v3/mail/send"
 SENDGRID_API_KEY   = os.environ.get("SENDGRID_API_KEY", "")
 FROM_EMAIL         = os.environ.get("SENDGRID_FROM_EMAIL", "noreply@yourdomain.com")
 FROM_NAME          = os.environ.get("SENDGRID_FROM_NAME", "ACIA — Customer Intelligence")
+TRUSTED_SENDGRID_HOSTS = {"api.sendgrid.com"}
 
 # If True, prints email content but doesn't actually send
 # Automatically True when API key is not configured
@@ -130,40 +130,54 @@ def send_email(
 
     # ── Make API call ──────────────────────────────────────────────────────────
     try:
-        req = urllib.request.Request(
+        validate_trusted_https_url(
             SENDGRID_API_URL,
-            data=json.dumps(payload).encode("utf-8"),
+            allowed_hosts=TRUSTED_SENDGRID_HOSTS,
+        )
+        resp = requests.post(
+            SENDGRID_API_URL,
+            json=payload,
             headers={
-                "Authorization": f"Bearer {SENDGRID_API_KEY}",
-                "Content-Type":  "application/json",
+                "Authorization": f"******",
+                "Content-Type": "application/json",
             },
-            method="POST",
+            timeout=15,
+            allow_redirects=False,
         )
 
-        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
-            # SendGrid returns 202 Accepted on success with X-Message-Id header
-            message_id = resp.headers.get("X-Message-Id", "unknown")
+        if resp.status_code != 202:
             return EmailResult(
-                success=True,
+                success=False,
                 to_email=to_email,
                 subject=subject,
                 action_type=action_type,
-                message_id=message_id,
-                error=None,
+                message_id=None,
+                error=f"HTTP {resp.status_code}: {_parse_sendgrid_error(resp.text)}",
                 dry_run=False,
                 sent_at=now,
             )
 
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8", errors="replace")
-        error_msg  = f"HTTP {e.code}: {_parse_sendgrid_error(error_body)}"
+        # SendGrid returns 202 Accepted on success with X-Message-Id header
+        message_id = resp.headers.get("X-Message-Id", "unknown")
+        return EmailResult(
+            success=True,
+            to_email=to_email,
+            subject=subject,
+            action_type=action_type,
+            message_id=message_id,
+            error=None,
+            dry_run=False,
+            sent_at=now,
+        )
+
+    except requests.RequestException as e:
         return EmailResult(
             success=False,
             to_email=to_email,
             subject=subject,
             action_type=action_type,
             message_id=None,
-            error=error_msg,
+            error=f"HTTP request failed: {e}",
             dry_run=False,
             sent_at=now,
         )

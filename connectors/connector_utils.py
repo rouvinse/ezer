@@ -26,6 +26,47 @@ upserts succeed, so a crash before that point leaves data intact.
 
 from __future__ import annotations
 from utils.db import get_connection, DB_ENGINE
+from utils.sql_security import ensure_safe_identifier, ensure_safe_identifiers
+
+ALLOWED_TABLE_PK: dict[str, set[str]] = {
+    "customers": {"customer_id"},
+    "transactions": {"txn_id"},
+    "engagement_events": {"event_id"},
+    "support_tickets": {"ticket_id"},
+    "email_log": {"email_id"},
+    "agent_actions": {"action_id"},
+    "ml_predictions": {"pred_id", "prediction_id"},
+}
+
+ALLOWED_TABLE_COLUMNS: dict[str, set[str]] = {
+    "customers": {"customer_id", "name", "email", "company", "industry", "plan", "mrr", "signup_date",
+                  "country", "employee_count", "health_score", "nps_score", "is_churned", "churn_date",
+                  "created_at", "company_id"},
+    "transactions": {"txn_id", "customer_id", "amount", "currency", "txn_type", "product_id", "status",
+                     "txn_date", "company_id"},
+    "engagement_events": {"event_id", "customer_id", "event_type", "channel", "session_duration", "event_date",
+                          "metadata", "company_id"},
+    "support_tickets": {"ticket_id", "customer_id", "topic", "status", "priority", "sentiment_score",
+                        "opened_at", "resolved_at", "company_id"},
+    "email_log": {"email_id", "customer_id", "email_type", "subject", "opened", "clicked", "sent_at", "company_id"},
+    "agent_actions": {"action_id", "customer_id", "action_type", "reason", "priority", "status", "outcome",
+                      "created_at", "executed_at", "decided_by", "company_id"},
+    "ml_predictions": {"pred_id", "prediction_id", "customer_id", "churn_score", "conversion_score", "segment",
+                       "predicted_at", "ltv_estimate", "company_id"},
+}
+
+
+def _validate_target(table: str, pk_col: str, cols: list[str]) -> tuple[str, str, list[str]]:
+    table = ensure_safe_identifier(table, allowed=set(ALLOWED_TABLE_PK), kind="table")
+    pk_col = ensure_safe_identifier(pk_col, allowed=ALLOWED_TABLE_PK[table], kind="primary key column")
+    valid_cols = ensure_safe_identifiers(
+        cols,
+        allowed=ALLOWED_TABLE_COLUMNS[table],
+        kind=f"{table} column",
+    )
+    if pk_col not in valid_cols:
+        raise ValueError(f"Primary key column '{pk_col}' missing from rows for table '{table}'")
+    return table, pk_col, valid_cols
 
 
 def safe_upsert_sync(
@@ -61,7 +102,7 @@ def safe_upsert_sync(
     conn   = get_connection()
     errors = []
     upserted = 0
-    cols   = list(rows[0].keys())
+    table, pk_col, cols = _validate_target(table, pk_col, list(rows[0].keys()))
 
     if DB_ENGINE == "postgresql":
         # PostgreSQL: INSERT ... ON CONFLICT DO UPDATE
@@ -120,15 +161,15 @@ def safe_upsert_sync(
         try:
             # Fetch all PKs for this tenant
             existing_rows = conn.execute(
-                f"SELECT {pk_col} FROM {table} WHERE company_id=?",  # nosec B608
-                (company_id,)  # nosec B608
+                f"SELECT {pk_col} FROM {table} WHERE company_id=?",
+                (company_id,)
             ).fetchall()
             stale_ids = [r[0] for r in existing_rows if r[0] not in upstream_ids]
 
             if stale_ids:
                 placeholders = ",".join(["?"] * len(stale_ids))
                 conn.execute(
-                    f"DELETE FROM {table} WHERE {pk_col} IN ({placeholders}) AND company_id=?",  # nosec B608
+                    f"DELETE FROM {table} WHERE {pk_col} IN ({placeholders}) AND company_id=?",
                     stale_ids + [company_id]
                 )
                 conn.commit()

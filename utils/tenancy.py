@@ -34,6 +34,7 @@ from typing import Optional
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.db import get_connection, read_sql
+from utils.sql_security import ensure_safe_identifier
 
 # ── Default tenant ────────────────────────────────────────────────────────────
 # All synthetic/dev data lives under this tenant
@@ -49,6 +50,12 @@ TENANT_TABLES = [
     "agent_actions",
     "ml_predictions",
 ]
+
+TENANT_TABLE_SET = set(TENANT_TABLES)
+
+
+def _safe_tenant_table(table: str) -> str:
+    return ensure_safe_identifier(table, allowed=TENANT_TABLE_SET, kind="tenant table")
 
 
 # ── Tenant context ─────────────────────────────────────────────────────────────
@@ -127,6 +134,7 @@ def add_company_id_columns():
 
     for table in TENANT_TABLES:
         try:
+            table = _safe_tenant_table(table)
             # Check if column already exists
             result = conn.execute(f"PRAGMA table_info({table})").fetchall()
             col_names = [r[1] for r in result]
@@ -155,13 +163,14 @@ def backfill_default_tenant():
 
     for table in TENANT_TABLES:
         try:
+            table = _safe_tenant_table(table)
             result = conn.execute(
-                f"UPDATE {table} SET company_id = ? WHERE company_id IS NULL",  # nosec B608
+                f"UPDATE {table} SET company_id = ? WHERE company_id IS NULL",
                 (DEFAULT_TENANT_ID,)
             )
             # Count rows updated via SELECT
             count = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",  # nosec B608
+                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",
                 (DEFAULT_TENANT_ID,)
             ).fetchone()[0]
             total_updated += count
@@ -236,8 +245,9 @@ def get_tenant_stats(company_id: str) -> dict:
 
     for table in TENANT_TABLES:
         try:
+            table = _safe_tenant_table(table)
             count = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",  # nosec B608
+                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",
                 (company_id,)
             ).fetchone()[0]
             stats[table] = count
@@ -280,8 +290,9 @@ def delete_tenant_data(company_id: str, confirm: bool = False) -> dict:
     # Delete in reverse dependency order
     for table in reversed(TENANT_TABLES):
         try:
+            table = _safe_tenant_table(table)
             result = conn.execute(
-                f"DELETE FROM {table} WHERE company_id = ?",  # nosec B608
+                f"DELETE FROM {table} WHERE company_id = ?",
                 (company_id,)
             )
             deleted[table] = result.rowcount if hasattr(result, 'rowcount') else 0

@@ -33,6 +33,8 @@ from datetime import datetime
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
+from utils.sql_security import ensure_safe_identifier, ensure_safe_identifiers
+
 SQLITE_PATH = ROOT / "data" / "acia.db"
 
 TABLES = [
@@ -44,6 +46,10 @@ TABLES = [
     "agent_actions",
     "ml_predictions",
 ]
+
+
+def _validate_table_name(table: str) -> str:
+    return ensure_safe_identifier(table, allowed=set(TABLES), kind="table")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -106,11 +112,12 @@ def create_schema(pg_conn):
 
 def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
     """Migrate a single table from SQLite to PostgreSQL."""
+    table = _validate_table_name(table)
     cur_sqlite = sqlite_conn.cursor()
     cur_pg     = pg_conn.cursor()
 
     # Get all rows from SQLite
-    cur_sqlite.execute(f"SELECT * FROM {table}")  # nosec B608
+    cur_sqlite.execute(f"SELECT * FROM {table}")
     rows = cur_sqlite.fetchall()
 
     if not rows:
@@ -118,12 +125,12 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
         return 0
 
     # Get column names
-    col_names = [d[0] for d in cur_sqlite.description]
+    col_names = ensure_safe_identifiers([d[0] for d in cur_sqlite.description], kind=f"{table} columns")
     placeholders = ", ".join(["%s"] * len(col_names))
     cols_str     = ", ".join(col_names)
 
     # Clear existing data in PG (for re-runs)
-    cur_pg.execute(f"DELETE FROM {table}")  # nosec B608
+    cur_pg.execute(f"DELETE FROM {table}")
 
     # Insert in batches of 500
     batch_size = 500
@@ -132,7 +139,7 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
     for i in range(0, len(rows), batch_size):
         batch = [tuple(row) for row in rows[i:i + batch_size]]
         cur_pg.executemany(
-            f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) "  # nosec B608
+            f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) "
             f"ON CONFLICT DO NOTHING",
             batch
         )
@@ -168,10 +175,11 @@ def verify_migration(sqlite_conn, pg_conn):
 
     all_match = True
     for table in TABLES:
-        cur_sqlite.execute(f"SELECT COUNT(*) FROM {table}")  # nosec B608
+        table = _validate_table_name(table)
+        cur_sqlite.execute(f"SELECT COUNT(*) FROM {table}")
         sqlite_count = cur_sqlite.fetchone()[0]
 
-        cur_pg.execute(f"SELECT COUNT(*) FROM {table}")  # nosec B608
+        cur_pg.execute(f"SELECT COUNT(*) FROM {table}")
         pg_count = cur_pg.fetchone()[0]
 
         match   = sqlite_count == pg_count
