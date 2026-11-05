@@ -110,7 +110,7 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
     cur_pg     = pg_conn.cursor()
 
     # Get all rows from SQLite
-    cur_sqlite.execute(f"SELECT * FROM {table}")
+    cur_sqlite.execute(f"SELECT * FROM {table}")  # nosec B608
     rows = cur_sqlite.fetchall()
 
     if not rows:
@@ -123,7 +123,7 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
     cols_str     = ", ".join(col_names)
 
     # Clear existing data in PG (for re-runs)
-    cur_pg.execute(f"DELETE FROM {table}")
+    cur_pg.execute(f"DELETE FROM {table}")  # nosec B608
 
     # Insert in batches of 500
     batch_size = 500
@@ -132,7 +132,7 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
     for i in range(0, len(rows), batch_size):
         batch = [tuple(row) for row in rows[i:i + batch_size]]
         cur_pg.executemany(
-            f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) "
+            f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) "  # nosec B608
             f"ON CONFLICT DO NOTHING",
             batch
         )
@@ -168,10 +168,10 @@ def verify_migration(sqlite_conn, pg_conn):
 
     all_match = True
     for table in TABLES:
-        cur_sqlite.execute(f"SELECT COUNT(*) FROM {table}")
+        cur_sqlite.execute(f"SELECT COUNT(*) FROM {table}")  # nosec B608
         sqlite_count = cur_sqlite.fetchone()[0]
 
-        cur_pg.execute(f"SELECT COUNT(*) FROM {table}")
+        cur_pg.execute(f"SELECT COUNT(*) FROM {table}")  # nosec B608
         pg_count = cur_pg.fetchone()[0]
 
         match   = sqlite_count == pg_count

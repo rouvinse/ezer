@@ -1134,6 +1134,6 @@ if __name__ == "__main__":
         try:
             import uvicorn
             print("Starting ACIA API on http://localhost:8000")
-            uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+            uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=True)
         except ImportError:
             print("Install uvicorn:  pip install uvicorn")

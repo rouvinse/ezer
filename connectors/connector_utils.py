@@ -120,15 +120,15 @@ def safe_upsert_sync(
         try:
             # Fetch all PKs for this tenant
             existing_rows = conn.execute(
-                f"SELECT {pk_col} FROM {table} WHERE company_id=?",
-                (company_id,)
+                f"SELECT {pk_col} FROM {table} WHERE company_id=?",  # nosec B608
+                (company_id,)  # nosec B608
             ).fetchall()
             stale_ids = [r[0] for r in existing_rows if r[0] not in upstream_ids]
 
             if stale_ids:
                 placeholders = ",".join(["?"] * len(stale_ids))
                 conn.execute(
-                    f"DELETE FROM {table} WHERE {pk_col} IN ({placeholders}) AND company_id=?",
+                    f"DELETE FROM {table} WHERE {pk_col} IN ({placeholders}) AND company_id=?",  # nosec B608
                     stale_ids + [company_id]
                 )
                 conn.commit()

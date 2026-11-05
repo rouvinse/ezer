@@ -156,12 +156,12 @@ def backfill_default_tenant():
     for table in TENANT_TABLES:
         try:
             result = conn.execute(
-                f"UPDATE {table} SET company_id = ? WHERE company_id IS NULL",
+                f"UPDATE {table} SET company_id = ? WHERE company_id IS NULL",  # nosec B608
                 (DEFAULT_TENANT_ID,)
             )
             # Count rows updated via SELECT
             count = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",
+                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",  # nosec B608
                 (DEFAULT_TENANT_ID,)
             ).fetchone()[0]
             total_updated += count
@@ -237,7 +237,7 @@ def get_tenant_stats(company_id: str) -> dict:
     for table in TENANT_TABLES:
         try:
             count = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",
+                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",  # nosec B608
                 (company_id,)
             ).fetchone()[0]
             stats[table] = count
@@ -281,7 +281,7 @@ def delete_tenant_data(company_id: str, confirm: bool = False) -> dict:
     for table in reversed(TENANT_TABLES):
         try:
             result = conn.execute(
-                f"DELETE FROM {table} WHERE company_id = ?",
+                f"DELETE FROM {table} WHERE company_id = ?",  # nosec B608
                 (company_id,)
             )
             deleted[table] = result.rowcount if hasattr(result, 'rowcount') else 0

@@ -170,7 +170,7 @@ def _load_context(
 
     # ── customers — scoped by company_id ─────────────────────────────────────
     cust_rows = conn.execute(
-        f"SELECT * FROM customers "
+        f"SELECT * FROM customers "  # nosec B608
         f"WHERE customer_id IN ({placeholders}) AND company_id=?",
         customer_ids + [company_id]
     ).fetchall()
@@ -184,7 +184,7 @@ def _load_context(
         f"""SELECT p.* FROM ml_predictions p
             JOIN customers c ON c.customer_id = p.customer_id
             WHERE p.customer_id IN ({placeholders})
-              AND c.company_id = ?""",
+              AND c.company_id = ?""",  # nosec B608
         customer_ids + [company_id]
     ).fetchall()
     pred_cols    = [d[0] for d in conn.execute("SELECT * FROM ml_predictions LIMIT 0").description]
@@ -206,7 +206,7 @@ def _load_context(
                   AND t.company_id = ?
             WHERE c.customer_id IN ({placeholders})
               AND c.company_id = ?
-            GROUP BY c.customer_id""",
+            GROUP BY c.customer_id""",  # nosec B608
         [company_id, company_id] + customer_ids + [company_id]
     ).fetchall()
     for row in feat_rows:

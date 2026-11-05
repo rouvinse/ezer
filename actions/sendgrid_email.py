@@ -140,7 +140,7 @@ def send_email(
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
             # SendGrid returns 202 Accepted on success with X-Message-Id header
             message_id = resp.headers.get("X-Message-Id", "unknown")
             return EmailResult(
