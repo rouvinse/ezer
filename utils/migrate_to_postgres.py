@@ -33,6 +33,8 @@ from datetime import datetime
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
+from utils.sql_security import ensure_safe_identifier, ensure_safe_identifiers
+
 SQLITE_PATH = ROOT / "data" / "acia.db"
 
 TABLES = [
@@ -44,6 +46,10 @@ TABLES = [
     "agent_actions",
     "ml_predictions",
 ]
+
+
+def _validate_table_name(table: str) -> str:
+    return ensure_safe_identifier(table, allowed=set(TABLES), kind="table")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -106,6 +112,7 @@ def create_schema(pg_conn):
 
 def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
     """Migrate a single table from SQLite to PostgreSQL."""
+    table = _validate_table_name(table)
     cur_sqlite = sqlite_conn.cursor()
     cur_pg     = pg_conn.cursor()
 
@@ -118,7 +125,7 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
         return 0
 
     # Get column names
-    col_names = [d[0] for d in cur_sqlite.description]
+    col_names = ensure_safe_identifiers([d[0] for d in cur_sqlite.description], kind=f"{table} columns")
     placeholders = ", ".join(["%s"] * len(col_names))
     cols_str     = ", ".join(col_names)
 
@@ -168,6 +175,7 @@ def verify_migration(sqlite_conn, pg_conn):
 
     all_match = True
     for table in TABLES:
+        table = _validate_table_name(table)
         cur_sqlite.execute(f"SELECT COUNT(*) FROM {table}")
         sqlite_count = cur_sqlite.fetchone()[0]
 

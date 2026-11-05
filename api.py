@@ -1132,8 +1132,14 @@ if __name__ == "__main__":
         print("Install FastAPI first:  pip install fastapi uvicorn")
     else:
         try:
+            import os
             import uvicorn
-            print("Starting ACIA API on http://localhost:8000")
-            uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+            host = os.environ.get("ACIA_API_HOST", "127.0.0.1")
+            if host == "0.0.0.0" and os.environ.get("ACIA_ALLOW_PUBLIC_BIND") != "1":
+                raise ValueError(
+                    "Refusing public bind to 0.0.0.0 without ACIA_ALLOW_PUBLIC_BIND=1"
+                )
+            print(f"Starting ACIA API on http://{host}:8000")
+            uvicorn.run("api:app", host=host, port=8000, reload=True)
         except ImportError:
             print("Install uvicorn:  pip install uvicorn")

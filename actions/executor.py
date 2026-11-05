@@ -166,49 +166,62 @@ def _load_context(
     predictions.
     """
     conn = get_connection()
-    placeholders = ",".join("?" * len(customer_ids))
+    if not customer_ids:
+        conn.close()
+        return {}, {}
 
     # ── customers — scoped by company_id ─────────────────────────────────────
-    cust_rows = conn.execute(
-        f"SELECT * FROM customers "
-        f"WHERE customer_id IN ({placeholders}) AND company_id=?",
-        customer_ids + [company_id]
-    ).fetchall()
+    cust_rows = []
+    for customer_id in customer_ids:
+        cust_rows.extend(
+            conn.execute(
+                "SELECT * FROM customers WHERE customer_id = ? AND company_id = ?",
+                [customer_id, company_id],
+            ).fetchall()
+        )
     cust_cols  = [d[0] for d in conn.execute("SELECT * FROM customers LIMIT 0").description]
     customers  = {r[0]: dict(zip(cust_cols, r)) for r in cust_rows}
 
     # ── ml_predictions — scoped by company_id ────────────────────────────────
     # ml_predictions may not have a company_id column in every schema version;
     # we join through customers to enforce scoping.
-    pred_rows = conn.execute(
-        f"""SELECT p.* FROM ml_predictions p
-            JOIN customers c ON c.customer_id = p.customer_id
-            WHERE p.customer_id IN ({placeholders})
-              AND c.company_id = ?""",
-        customer_ids + [company_id]
-    ).fetchall()
+    pred_rows = []
+    for customer_id in customer_ids:
+        pred_rows.extend(
+            conn.execute(
+                """SELECT p.* FROM ml_predictions p
+                   JOIN customers c ON c.customer_id = p.customer_id
+                   WHERE p.customer_id = ?
+                     AND c.company_id = ?""",
+                [customer_id, company_id],
+            ).fetchall()
+        )
     pred_cols    = [d[0] for d in conn.execute("SELECT * FROM ml_predictions LIMIT 0").description]
     predictions  = {r[1]: dict(zip(pred_cols, r)) for r in pred_rows}
 
     # ── feature-derived fields — scoped by company_id ────────────────────────
-    feat_rows = conn.execute(
-        f"""SELECT c.customer_id,
-               CAST(julianday('now') - julianday(MAX(e.event_date)) AS INTEGER) AS days_since_last_event,
-               COUNT(t.ticket_id) AS open_tickets,
-               AVG(t.sentiment_score) AS avg_sentiment,
-               CAST(julianday('now') - julianday(c.signup_date) AS INTEGER) AS tenure_days
-            FROM customers c
-            LEFT JOIN engagement_events e
-                   ON e.customer_id = c.customer_id AND e.company_id = ?
-            LEFT JOIN support_tickets t
-                   ON t.customer_id = c.customer_id
-                  AND t.status = 'open'
-                  AND t.company_id = ?
-            WHERE c.customer_id IN ({placeholders})
-              AND c.company_id = ?
-            GROUP BY c.customer_id""",
-        [company_id, company_id] + customer_ids + [company_id]
-    ).fetchall()
+    feat_rows = []
+    for customer_id in customer_ids:
+        feat_rows.extend(
+            conn.execute(
+                """SELECT c.customer_id,
+                          CAST(julianday('now') - julianday(MAX(e.event_date)) AS INTEGER) AS days_since_last_event,
+                          COUNT(t.ticket_id) AS open_tickets,
+                          AVG(t.sentiment_score) AS avg_sentiment,
+                          CAST(julianday('now') - julianday(c.signup_date) AS INTEGER) AS tenure_days
+                   FROM customers c
+                   LEFT JOIN engagement_events e
+                          ON e.customer_id = c.customer_id AND e.company_id = ?
+                   LEFT JOIN support_tickets t
+                          ON t.customer_id = c.customer_id
+                         AND t.status = 'open'
+                         AND t.company_id = ?
+                   WHERE c.customer_id = ?
+                     AND c.company_id = ?
+                   GROUP BY c.customer_id""",
+                [company_id, company_id, customer_id, company_id],
+            ).fetchall()
+        )
     for row in feat_rows:
         cid = row[0]
         if cid in customers:
