@@ -72,3 +72,4 @@ ezer_tests/
 ezer_commits.patch
 ezer_fix.patch
 acia.db
+coverage.xml

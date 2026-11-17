@@ -170,7 +170,7 @@ def _load_context(
 
     # ── customers — scoped by company_id ─────────────────────────────────────
     cust_rows = conn.execute(
-        f"SELECT * FROM customers "
+        f"SELECT * FROM customers "  # nosec B608 — placeholders="?,?.." from len(); all values parameterized
         f"WHERE customer_id IN ({placeholders}) AND company_id=?",
         customer_ids + [company_id]
     ).fetchall()
@@ -181,7 +181,7 @@ def _load_context(
     # ml_predictions may not have a company_id column in every schema version;
     # we join through customers to enforce scoping.
     pred_rows = conn.execute(
-        f"""SELECT p.* FROM ml_predictions p
+        f"""SELECT p.* FROM ml_predictions p  # nosec B608 — placeholders="?,?.." from len(); all values parameterized
             JOIN customers c ON c.customer_id = p.customer_id
             WHERE p.customer_id IN ({placeholders})
               AND c.company_id = ?""",
@@ -192,7 +192,7 @@ def _load_context(
 
     # ── feature-derived fields — scoped by company_id ────────────────────────
     feat_rows = conn.execute(
-        f"""SELECT c.customer_id,
+        f"""SELECT c.customer_id,  # nosec B608 — placeholders="?,?.." from len(); all values parameterized
                CAST(julianday('now') - julianday(MAX(e.event_date)) AS INTEGER) AS days_since_last_event,
                COUNT(t.ticket_id) AS open_tickets,
                AVG(t.sentiment_score) AS avg_sentiment,

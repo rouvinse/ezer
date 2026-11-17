@@ -38,12 +38,12 @@ jobs:
         env:
           DB_ENGINE: sqlite
         run: |
+          # omit patterns live in .coveragerc — --cov-omit is not a valid flag
           python -m pytest tests/ -v \
             --tb=short \
             --cov=. \
             --cov-report=term-missing \
             --cov-report=xml \
-            --cov-omit="tests/*,source_code/*,ezer_tests/*,data/generate.py" \
             -q
 
       - name: Upload coverage report

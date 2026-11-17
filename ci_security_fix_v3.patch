@@ -1,0 +1,504 @@
+From 7c41727e3ae42b89da24bd9a51c3e27e13ba6f92 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 17 Nov 2026 13:51:43 +0000
+Subject: [PATCH 1/2] fix: CI pytest-cov args + bandit medium/high findings
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+CI fix
+- Remove invalid --cov-omit flag (not supported in pytest-cov 7.x)
+- Add .coveragerc with omit patterns; CI command now just uses --cov=.
+
+Bandit security scan (0 medium+high with -ll -ii after this commit)
+- B608 (SQL injection): add # nosec B608 on 14 parameterized f-string
+  queries in executor.py, connector_utils.py, migrate_to_postgres.py,
+  tenancy.py — placeholders are "?,?.." built from len() or internal
+  TABLES/TENANT_TABLES constants, never from user input
+- B310 (urlopen): add # nosec B310 on HTTPS-only constants in
+  sendgrid_email.py and agent/planner.py
+- B104 (bind all interfaces): add # nosec B104 on api.py uvicorn line —
+  intentional for Railway/Docker containers
+- B105/B107 (hardcoded password): add # nosec on salesforce_connector.py
+  empty-string OAuth placeholders, not real passwords
+- B113 (no timeout): add timeout=30 to all requests.get/post calls in
+  hubspot, intercom, razorpay, salesforce connectors
+- B110 (try/except/pass): replace silent pass with logging.debug in
+  approval.py get_trust_mode and get_approval_log fallback paths
+
+Tests: 87 passed, 1 skipped
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Cz64KwHkF4CaTaX2Zqqga2
+---
+ .coveragerc                        | 12 ++++++++++++
+ .github/workflows/ci.yml           |  2 +-
+ actions/approval.py                |  8 +++++---
+ actions/executor.py                |  6 +++---
+ actions/sendgrid_email.py          |  2 +-
+ agent/planner.py                   |  2 +-
+ api.py                             |  2 +-
+ connectors/connector_utils.py      |  8 ++++----
+ connectors/hubspot_connector.py    |  4 ++--
+ connectors/intercom_connector.py   |  6 +++---
+ connectors/razorpay_connector.py   |  2 +-
+ connectors/salesforce_connector.py | 12 ++++++------
+ utils/migrate_to_postgres.py       | 10 +++++-----
+ utils/tenancy.py                   |  8 ++++----
+ 14 files changed, 49 insertions(+), 35 deletions(-)
+ create mode 100644 .coveragerc
+
+diff --git a/.coveragerc b/.coveragerc
+new file mode 100644
+index 0000000..2003da1
+--- /dev/null
++++ b/.coveragerc
+@@ -0,0 +1,12 @@
++[run]
++source = .
++omit =
++    tests/*
++    source_code/*
++    ezer_tests/*
++    data/generate.py
++    */site-packages/*
++
++[report]
++show_missing = True
++skip_covered = False
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 9fd1753..37dec21 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -38,12 +38,12 @@ jobs:
+         env:
+           DB_ENGINE: sqlite
+         run: |
++          # omit patterns live in .coveragerc — --cov-omit is not a valid flag
+           python -m pytest tests/ -v \
+             --tb=short \
+             --cov=. \
+             --cov-report=term-missing \
+             --cov-report=xml \
+-            --cov-omit="tests/*,source_code/*,ezer_tests/*,data/generate.py" \
+             -q
+ 
+       - name: Upload coverage report
+diff --git a/actions/approval.py b/actions/approval.py
+index 12fedb7..f818030 100644
+--- a/actions/approval.py
++++ b/actions/approval.py
+@@ -19,6 +19,7 @@ Trust modes (configurable per company):
+ """
+ 
+ from __future__ import annotations
++import logging
+ import uuid
+ from pathlib import Path
+ from datetime import datetime
+@@ -84,8 +85,8 @@ def get_trust_mode(company_id: str | None = None) -> str:
+         )
+         if not df.empty:
+             return str(df.iloc[0]["trust_mode"])
+-    except Exception:
+-        pass
++    except Exception as exc:  # nosec B110 — table may not exist yet; return safe default
++        logging.getLogger(__name__).debug("get_trust_mode fallback: %s", exc)
+     return TRUST_MODE_FULL
+ 
+ 
+@@ -397,5 +398,6 @@ def get_approval_history(
+             params=(cid, limit)
+         )
+         return df.to_dict("records")
+-    except Exception:
++    except Exception as exc:  # nosec B110 — approval_log table may not exist in older schemas
++        logging.getLogger(__name__).debug("get_approval_log fallback: %s", exc)
+         return []
+diff --git a/actions/executor.py b/actions/executor.py
+index af5a806..2f1359c 100644
+--- a/actions/executor.py
++++ b/actions/executor.py
+@@ -170,7 +170,7 @@ def _load_context(
+ 
+     # ── customers — scoped by company_id ─────────────────────────────────────
+     cust_rows = conn.execute(
+-        f"SELECT * FROM customers "
++        f"SELECT * FROM customers "  # nosec B608 — placeholders="?,?.." from len(); all values parameterized
+         f"WHERE customer_id IN ({placeholders}) AND company_id=?",
+         customer_ids + [company_id]
+     ).fetchall()
+@@ -181,7 +181,7 @@ def _load_context(
+     # ml_predictions may not have a company_id column in every schema version;
+     # we join through customers to enforce scoping.
+     pred_rows = conn.execute(
+-        f"""SELECT p.* FROM ml_predictions p
++        f"""SELECT p.* FROM ml_predictions p  # nosec B608 — placeholders="?,?.." from len(); all values parameterized
+             JOIN customers c ON c.customer_id = p.customer_id
+             WHERE p.customer_id IN ({placeholders})
+               AND c.company_id = ?""",
+@@ -192,7 +192,7 @@ def _load_context(
+ 
+     # ── feature-derived fields — scoped by company_id ────────────────────────
+     feat_rows = conn.execute(
+-        f"""SELECT c.customer_id,
++        f"""SELECT c.customer_id,  # nosec B608 — placeholders="?,?.." from len(); all values parameterized
+                CAST(julianday('now') - julianday(MAX(e.event_date)) AS INTEGER) AS days_since_last_event,
+                COUNT(t.ticket_id) AS open_tickets,
+                AVG(t.sentiment_score) AS avg_sentiment,
+diff --git a/actions/sendgrid_email.py b/actions/sendgrid_email.py
+index 7ee08de..66bdefa 100644
+--- a/actions/sendgrid_email.py
++++ b/actions/sendgrid_email.py
+@@ -140,7 +140,7 @@ def send_email(
+             method="POST",
+         )
+ 
+-        with urllib.request.urlopen(req, timeout=15) as resp:
++        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 — URL is hardcoded HTTPS constant (SENDGRID_API_URL)
+             # SendGrid returns 202 Accepted on success with X-Message-Id header
+             message_id = resp.headers.get("X-Message-Id", "unknown")
+             return EmailResult(
+diff --git a/agent/planner.py b/agent/planner.py
+index fe5f135..330c4b6 100644
+--- a/agent/planner.py
++++ b/agent/planner.py
+@@ -112,7 +112,7 @@ def _call_claude(prompt: str, retries: int = 2) -> dict | None:
+             headers={"Content-Type": "application/json"},
+             method="POST"
+         )
+-        with urllib.request.urlopen(req, timeout=30) as resp:
++        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 — URL is hardcoded HTTPS constant (Anthropic API)
+             data = json.loads(resp.read())
+ 
+         text = "".join(
+diff --git a/api.py b/api.py
+index bf5604b..0c3d309 100644
+--- a/api.py
++++ b/api.py
+@@ -1134,6 +1134,6 @@ if __name__ == "__main__":
+         try:
+             import uvicorn
+             print("Starting ACIA API on http://localhost:8000")
+-            uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
++            uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)  # nosec B104 — intentional: container/Railway needs binding on all interfaces
+         except ImportError:
+             print("Install uvicorn:  pip install uvicorn")
+diff --git a/connectors/connector_utils.py b/connectors/connector_utils.py
+index a9fe370..963b78e 100644
+--- a/connectors/connector_utils.py
++++ b/connectors/connector_utils.py
+@@ -71,7 +71,7 @@ def safe_upsert_sync(
+         update_cols = [c for c in cols if c != pk_col]
+         update_set  = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+ 
+-        sql = (
++        sql = (  # nosec B608 — table/pk_col are internal constants from connector schemas, not user input
+             f"INSERT INTO {table} ({col_list}) VALUES ({ph_list}) "
+             f"ON CONFLICT ({pk_col}) DO UPDATE SET {update_set}"
+         )
+@@ -98,7 +98,7 @@ def safe_upsert_sync(
+         # SQLite: INSERT OR REPLACE handles conflict on primary key
+         col_list = ", ".join(cols)
+         ph_list  = ", ".join([f":{c}" for c in cols])
+-        sql      = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({ph_list})"
++        sql      = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({ph_list})"  # nosec B608 — internal constants
+ 
+         try:
+             conn.executemany(sql, rows)
+@@ -120,7 +120,7 @@ def safe_upsert_sync(
+         try:
+             # Fetch all PKs for this tenant
+             existing_rows = conn.execute(
+-                f"SELECT {pk_col} FROM {table} WHERE company_id=?",
++                f"SELECT {pk_col} FROM {table} WHERE company_id=?",  # nosec B608 — table/pk_col are internal constants; company_id parameterized
+                 (company_id,)
+             ).fetchall()
+             stale_ids = [r[0] for r in existing_rows if r[0] not in upstream_ids]
+@@ -128,7 +128,7 @@ def safe_upsert_sync(
+             if stale_ids:
+                 placeholders = ",".join(["?"] * len(stale_ids))
+                 conn.execute(
+-                    f"DELETE FROM {table} WHERE {pk_col} IN ({placeholders}) AND company_id=?",
++                    f"DELETE FROM {table} WHERE {pk_col} IN ({placeholders}) AND company_id=?",  # nosec B608 — internal constants; stale_ids + company_id parameterized
+                     stale_ids + [company_id]
+                 )
+                 conn.commit()
+diff --git a/connectors/hubspot_connector.py b/connectors/hubspot_connector.py
+index 0478745..8b52341 100644
+--- a/connectors/hubspot_connector.py
++++ b/connectors/hubspot_connector.py
+@@ -84,7 +84,7 @@ def _make_headers(access_token: str) -> dict:
+ def hubspot_get(endpoint: str, access_token: str, params: dict = None) -> dict:
+     """Make an authenticated GET request to HubSpot API."""
+     url = f"{HUBSPOT_BASE_URL}/{endpoint}"
+-    response = requests.get(url, headers=_make_headers(access_token), params=params or {})
++    response = requests.get(url, headers=_make_headers(access_token), params=params or {}, timeout=30)
+     response.raise_for_status()
+     return response.json()
+ 
+@@ -92,7 +92,7 @@ def hubspot_get(endpoint: str, access_token: str, params: dict = None) -> dict:
+ def hubspot_post(endpoint: str, access_token: str, payload: dict) -> dict:
+     """Make an authenticated POST request to HubSpot API."""
+     url = f"{HUBSPOT_BASE_URL}/{endpoint}"
+-    response = requests.post(url, headers=_make_headers(access_token), json=payload)
++    response = requests.post(url, headers=_make_headers(access_token), json=payload, timeout=30)
+     response.raise_for_status()
+     return response.json()
+ 
+diff --git a/connectors/intercom_connector.py b/connectors/intercom_connector.py
+index a485615..113a798 100644
+--- a/connectors/intercom_connector.py
++++ b/connectors/intercom_connector.py
+@@ -67,7 +67,7 @@ def test_connection(access_token: str = None) -> bool:
+     """Test Intercom API connection."""
+     token = access_token or os.environ.get("INTERCOM_ACCESS_TOKEN", "")
+     try:
+-        response = requests.get(f"{INTERCOM_BASE_URL}/me", headers=_make_headers(token))
++        response = requests.get(f"{INTERCOM_BASE_URL}/me", headers=_make_headers(token), timeout=30)
+         response.raise_for_status()
+         data = response.json()
+         print(f"\n✅ Intercom connected")
+@@ -84,7 +84,7 @@ def test_connection(access_token: str = None) -> bool:
+ def intercom_get(endpoint: str, access_token: str, params: dict = None) -> dict:
+     """Make authenticated GET request to Intercom."""
+     url = f"{INTERCOM_BASE_URL}/{endpoint}"
+-    response = requests.get(url, headers=_make_headers(access_token), params=params or {})
++    response = requests.get(url, headers=_make_headers(access_token), params=params or {}, timeout=30)
+     response.raise_for_status()
+     return response.json()
+ 
+@@ -92,7 +92,7 @@ def intercom_get(endpoint: str, access_token: str, params: dict = None) -> dict:
+ def intercom_post(endpoint: str, access_token: str, payload: dict) -> dict:
+     """Make authenticated POST request to Intercom (for search)."""
+     url = f"{INTERCOM_BASE_URL}/{endpoint}"
+-    response = requests.post(url, headers=_make_headers(access_token), json=payload)
++    response = requests.post(url, headers=_make_headers(access_token), json=payload, timeout=30)
+     response.raise_for_status()
+     return response.json()
+ 
+diff --git a/connectors/razorpay_connector.py b/connectors/razorpay_connector.py
+index 7fc0a9b..63d4cc4 100644
+--- a/connectors/razorpay_connector.py
++++ b/connectors/razorpay_connector.py
+@@ -61,7 +61,7 @@ def _get_auth(key_id: str, key_secret: str) -> tuple:
+ def razorpay_get(endpoint: str, key_id: str, key_secret: str, params: dict = None) -> dict:
+     """Make an authenticated GET request to Razorpay API."""
+     url = f"{RAZORPAY_BASE_URL}/{endpoint}"
+-    response = requests.get(url, auth=_get_auth(key_id, key_secret), params=params or {})
++    response = requests.get(url, auth=_get_auth(key_id, key_secret), params=params or {}, timeout=30)
+     response.raise_for_status()
+     return response.json()
+ 
+diff --git a/connectors/salesforce_connector.py b/connectors/salesforce_connector.py
+index d8e87f9..6750964 100644
+--- a/connectors/salesforce_connector.py
++++ b/connectors/salesforce_connector.py
+@@ -67,7 +67,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
+ #     callers are responsible for passing those values downstream.
+ 
+ 
+-def authenticate(
++def authenticate(  # nosec B107 — empty string defaults are OAuth placeholders, not passwords
+     username:       str,
+     password:       str,
+     security_token: str,
+@@ -107,13 +107,13 @@ def authenticate(
+         payload = {
+             "grant_type":    "password",
+             "client_id":     "3MVG9pe2TCkV1DedT5uGI10K1J9XrYXX9EBiD9R5n1_",
+-            "client_secret": "",
++            "client_secret": "",  # nosec B105 — placeholder for the username/password OAuth flow; actual secret passed by caller
+             "username":      username,
+             "password":      password + security_token,
+         }
+ 
+     login_url = f"https://{domain}.salesforce.com/services/oauth2/token"
+-    response  = requests.post(login_url, data=payload)
++    response  = requests.post(login_url, data=payload, timeout=30)
+ 
+     if response.status_code != 200:
+         error_desc = response.json().get("error_description", response.text)
+@@ -145,7 +145,7 @@ def sf_query(soql: str, access_token: str, instance_url: str) -> list[dict]:
+     params  = {"q": soql}
+ 
+     while True:
+-        response = requests.get(url, headers=sf_get_headers(access_token), params=params)
++        response = requests.get(url, headers=sf_get_headers(access_token), params=params, timeout=30)
+         response.raise_for_status()
+         data = response.json()
+ 
+@@ -164,7 +164,7 @@ def sf_query(soql: str, access_token: str, instance_url: str) -> list[dict]:
+     return records
+ 
+ 
+-def test_connection(
++def test_connection(  # nosec B107 — empty string defaults are OAuth placeholders, not passwords
+     username:       str = None,
+     password:       str = None,
+     security_token: str = None,
+@@ -535,7 +535,7 @@ def write_to_db(
+ 
+ # ── Main sync ──────────────────────────────────────────────────────────────────
+ 
+-def sync_salesforce(
++def sync_salesforce(  # nosec B107 — empty string defaults are OAuth placeholders, not passwords
+     company_id:            str,
+     username:              str = None,
+     password:              str = None,
+diff --git a/utils/migrate_to_postgres.py b/utils/migrate_to_postgres.py
+index ca9076d..d9bc9fe 100644
+--- a/utils/migrate_to_postgres.py
++++ b/utils/migrate_to_postgres.py
+@@ -110,7 +110,7 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
+     cur_pg     = pg_conn.cursor()
+ 
+     # Get all rows from SQLite
+-    cur_sqlite.execute(f"SELECT * FROM {table}")
++    cur_sqlite.execute(f"SELECT * FROM {table}")  # nosec B608 — table is from TABLES constant list, not user input
+     rows = cur_sqlite.fetchall()
+ 
+     if not rows:
+@@ -123,7 +123,7 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
+     cols_str     = ", ".join(col_names)
+ 
+     # Clear existing data in PG (for re-runs)
+-    cur_pg.execute(f"DELETE FROM {table}")
++    cur_pg.execute(f"DELETE FROM {table}")  # nosec B608 — table is from TABLES constant list, not user input
+ 
+     # Insert in batches of 500
+     batch_size = 500
+@@ -132,7 +132,7 @@ def migrate_table(table: str, sqlite_conn, pg_conn) -> int:
+     for i in range(0, len(rows), batch_size):
+         batch = [tuple(row) for row in rows[i:i + batch_size]]
+         cur_pg.executemany(
+-            f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) "
++            f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) "  # nosec B608 — table from TABLES const; cols_str from DB description; values parameterized
+             f"ON CONFLICT DO NOTHING",
+             batch
+         )
+@@ -168,10 +168,10 @@ def verify_migration(sqlite_conn, pg_conn):
+ 
+     all_match = True
+     for table in TABLES:
+-        cur_sqlite.execute(f"SELECT COUNT(*) FROM {table}")
++        cur_sqlite.execute(f"SELECT COUNT(*) FROM {table}")  # nosec B608 — table from TABLES const
+         sqlite_count = cur_sqlite.fetchone()[0]
+ 
+-        cur_pg.execute(f"SELECT COUNT(*) FROM {table}")
++        cur_pg.execute(f"SELECT COUNT(*) FROM {table}")  # nosec B608 — table from TABLES const
+         pg_count = cur_pg.fetchone()[0]
+ 
+         match   = sqlite_count == pg_count
+diff --git a/utils/tenancy.py b/utils/tenancy.py
+index dd10487..679531c 100644
+--- a/utils/tenancy.py
++++ b/utils/tenancy.py
+@@ -156,12 +156,12 @@ def backfill_default_tenant():
+     for table in TENANT_TABLES:
+         try:
+             result = conn.execute(
+-                f"UPDATE {table} SET company_id = ? WHERE company_id IS NULL",
++                f"UPDATE {table} SET company_id = ? WHERE company_id IS NULL",  # nosec B608 — table from TENANT_TABLES const; values parameterized
+                 (DEFAULT_TENANT_ID,)
+             )
+             # Count rows updated via SELECT
+             count = conn.execute(
+-                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",
++                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",  # nosec B608 — table from TENANT_TABLES const
+                 (DEFAULT_TENANT_ID,)
+             ).fetchone()[0]
+             total_updated += count
+@@ -237,7 +237,7 @@ def get_tenant_stats(company_id: str) -> dict:
+     for table in TENANT_TABLES:
+         try:
+             count = conn.execute(
+-                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",
++                f"SELECT COUNT(*) FROM {table} WHERE company_id = ?",  # nosec B608 — table from TENANT_TABLES const
+                 (company_id,)
+             ).fetchone()[0]
+             stats[table] = count
+@@ -281,7 +281,7 @@ def delete_tenant_data(company_id: str, confirm: bool = False) -> dict:
+     for table in reversed(TENANT_TABLES):
+         try:
+             result = conn.execute(
+-                f"DELETE FROM {table} WHERE company_id = ?",
++                f"DELETE FROM {table} WHERE company_id = ?",  # nosec B608 — table from TENANT_TABLES const; company_id parameterized
+                 (company_id,)
+             )
+             deleted[table] = result.rowcount if hasattr(result, 'rowcount') else 0
+-- 
+2.43.0
+
+
+From 22f588b6233c4d9f6530428a8db92c07272c545c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 17 Nov 2026 13:51:43 +0000
+Subject: [PATCH 2/2] chore: untrack .pyc files, add coverage.xml to .gitignore
+
+- Remove tracked .pyc files from tests/__pycache__/ (should never
+  have been committed; *.pyc is already in .gitignore but these
+  were added before the rule)
+- Add coverage.xml to .gitignore so CI-generated reports don't
+  appear as untracked files
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Cz64KwHkF4CaTaX2Zqqga2
+---
+ .gitignore                                        |   1 +
+ tests/__pycache__/__init__.cpython-313.pyc        | Bin 141 -> 0 bytes
+ .../__pycache__/__init__.cpython-313.pyc          | Bin 152 -> 0 bytes
+ tests/unit/__pycache__/__init__.cpython-313.pyc   | Bin 146 -> 0 bytes
+ 4 files changed, 1 insertion(+)
+ delete mode 100644 tests/__pycache__/__init__.cpython-313.pyc
+ delete mode 100644 tests/functional/__pycache__/__init__.cpython-313.pyc
+ delete mode 100644 tests/unit/__pycache__/__init__.cpython-313.pyc
+
+diff --git a/.gitignore b/.gitignore
+index 90480ab..001e9a2 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -72,3 +72,4 @@ ezer_tests/
+ ezer_commits.patch
+ ezer_fix.patch
+ acia.db
++coverage.xml
+diff --git a/tests/__pycache__/__init__.cpython-313.pyc b/tests/__pycache__/__init__.cpython-313.pyc
+deleted file mode 100644
+index 2374319e3bd3a1e28d7f8e60f9ebc3b0442809e3..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 141
+zcmey&%ge>Uz`)?h@hS^MKL!ynzzAi0W?^7pn97jOpvmaBlA(x+fq~&ONa~i3enx(7
+zs(x}#VrfdMeo=mDS!P~ws(xx!YLR|PYH>-ietdjpUS>&ryk0@&Ee@O9{FKt1RJ$Tp
+V1_rR<#URE<W=2NFB4!2#1^^svAT$5~
+
+diff --git a/tests/functional/__pycache__/__init__.cpython-313.pyc b/tests/functional/__pycache__/__init__.cpython-313.pyc
+deleted file mode 100644
+index 686fca009ee7bc954c8ce70476fdd01fcbfc9ea9..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 152
+zcmey&%ge>Uz`&5g`6>%UKL!ynzzAi0W?^7pn97jOpvmaBlA(x+fq~&ONa~ikenx(7
+zs(x}#VrfdMeo=mDS!P~ws(xx!YLR|PYH>-iep+c>a!F=>USf`Ze0*kJW=VX!UP0w8
+g4x8Nkl+v73yCPNw2CzNFAjU^#Mn=XWW(EcZ00aLd#Q*>R
+
+diff --git a/tests/unit/__pycache__/__init__.cpython-313.pyc b/tests/unit/__pycache__/__init__.cpython-313.pyc
+deleted file mode 100644
+index 5a6fdae1d23bdb5cadcd941343d81043645c1507..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 146
+zcmey&%ge>Uz`)?h@hS^MKL!ynzzAi0W?^7pn97jOpvmaBlA(x+fq~&ONa~iMenx(7
+zs(x}#VrfdMeo=mDS!P~ws(xx!YLR|PYH>-ieraB2iGF;1W?p7Ve7s&k<t+}I-29Z%
+aoK(9aRt5&J4aFeFM`lJw#v*101_l7<(IO}S
+
+-- 
+2.43.0
+

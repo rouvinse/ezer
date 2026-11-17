@@ -71,7 +71,7 @@ def safe_upsert_sync(
         update_cols = [c for c in cols if c != pk_col]
         update_set  = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
-        sql = (
+        sql = (  # nosec B608 — table/pk_col are internal constants from connector schemas, not user input
             f"INSERT INTO {table} ({col_list}) VALUES ({ph_list}) "
             f"ON CONFLICT ({pk_col}) DO UPDATE SET {update_set}"
         )
@@ -98,7 +98,7 @@ def safe_upsert_sync(
         # SQLite: INSERT OR REPLACE handles conflict on primary key
         col_list = ", ".join(cols)
         ph_list  = ", ".join([f":{c}" for c in cols])
-        sql      = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({ph_list})"
+        sql      = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({ph_list})"  # nosec B608 — internal constants
 
         try:
             conn.executemany(sql, rows)
@@ -120,7 +120,7 @@ def safe_upsert_sync(
         try:
             # Fetch all PKs for this tenant
             existing_rows = conn.execute(
-                f"SELECT {pk_col} FROM {table} WHERE company_id=?",
+                f"SELECT {pk_col} FROM {table} WHERE company_id=?",  # nosec B608 — table/pk_col are internal constants; company_id parameterized
                 (company_id,)
             ).fetchall()
             stale_ids = [r[0] for r in existing_rows if r[0] not in upstream_ids]
@@ -128,7 +128,7 @@ def safe_upsert_sync(
             if stale_ids:
                 placeholders = ",".join(["?"] * len(stale_ids))
                 conn.execute(
-                    f"DELETE FROM {table} WHERE {pk_col} IN ({placeholders}) AND company_id=?",
+                    f"DELETE FROM {table} WHERE {pk_col} IN ({placeholders}) AND company_id=?",  # nosec B608 — internal constants; stale_ids + company_id parameterized
                     stale_ids + [company_id]
                 )
                 conn.commit()

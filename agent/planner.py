@@ -112,7 +112,7 @@ def _call_claude(prompt: str, retries: int = 2) -> dict | None:
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 — URL is hardcoded HTTPS constant (Anthropic API)
             data = json.loads(resp.read())
 
         text = "".join(

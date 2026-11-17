@@ -1,0 +1,12 @@
+[run]
+source = .
+omit =
+    tests/*
+    source_code/*
+    ezer_tests/*
+    data/generate.py
+    */site-packages/*
+
+[report]
+show_missing = True
+skip_covered = False

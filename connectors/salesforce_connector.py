@@ -67,7 +67,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 #     callers are responsible for passing those values downstream.
 
 
-def authenticate(
+def authenticate(  # nosec B107 — empty string defaults are OAuth placeholders, not passwords
     username:       str,
     password:       str,
     security_token: str,
@@ -107,13 +107,13 @@ def authenticate(
         payload = {
             "grant_type":    "password",
             "client_id":     "3MVG9pe2TCkV1DedT5uGI10K1J9XrYXX9EBiD9R5n1_",
-            "client_secret": "",
+            "client_secret": "",  # nosec B105 — placeholder for the username/password OAuth flow; actual secret passed by caller
             "username":      username,
             "password":      password + security_token,
         }
 
     login_url = f"https://{domain}.salesforce.com/services/oauth2/token"
-    response  = requests.post(login_url, data=payload)
+    response  = requests.post(login_url, data=payload, timeout=30)
 
     if response.status_code != 200:
         error_desc = response.json().get("error_description", response.text)
@@ -145,7 +145,7 @@ def sf_query(soql: str, access_token: str, instance_url: str) -> list[dict]:
     params  = {"q": soql}
 
     while True:
-        response = requests.get(url, headers=sf_get_headers(access_token), params=params)
+        response = requests.get(url, headers=sf_get_headers(access_token), params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
 
@@ -164,7 +164,7 @@ def sf_query(soql: str, access_token: str, instance_url: str) -> list[dict]:
     return records
 
 
-def test_connection(
+def test_connection(  # nosec B107 — empty string defaults are OAuth placeholders, not passwords
     username:       str = None,
     password:       str = None,
     security_token: str = None,
@@ -535,7 +535,7 @@ def write_to_db(
 
 # ── Main sync ──────────────────────────────────────────────────────────────────
 
-def sync_salesforce(
+def sync_salesforce(  # nosec B107 — empty string defaults are OAuth placeholders, not passwords
     company_id:            str,
     username:              str = None,
     password:              str = None,

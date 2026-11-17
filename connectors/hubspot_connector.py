@@ -84,7 +84,7 @@ def _make_headers(access_token: str) -> dict:
 def hubspot_get(endpoint: str, access_token: str, params: dict = None) -> dict:
     """Make an authenticated GET request to HubSpot API."""
     url = f"{HUBSPOT_BASE_URL}/{endpoint}"
-    response = requests.get(url, headers=_make_headers(access_token), params=params or {})
+    response = requests.get(url, headers=_make_headers(access_token), params=params or {}, timeout=30)
     response.raise_for_status()
     return response.json()
 
@@ -92,7 +92,7 @@ def hubspot_get(endpoint: str, access_token: str, params: dict = None) -> dict:
 def hubspot_post(endpoint: str, access_token: str, payload: dict) -> dict:
     """Make an authenticated POST request to HubSpot API."""
     url = f"{HUBSPOT_BASE_URL}/{endpoint}"
-    response = requests.post(url, headers=_make_headers(access_token), json=payload)
+    response = requests.post(url, headers=_make_headers(access_token), json=payload, timeout=30)
     response.raise_for_status()
     return response.json()
 

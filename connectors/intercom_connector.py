@@ -67,7 +67,7 @@ def test_connection(access_token: str = None) -> bool:
     """Test Intercom API connection."""
     token = access_token or os.environ.get("INTERCOM_ACCESS_TOKEN", "")
     try:
-        response = requests.get(f"{INTERCOM_BASE_URL}/me", headers=_make_headers(token))
+        response = requests.get(f"{INTERCOM_BASE_URL}/me", headers=_make_headers(token), timeout=30)
         response.raise_for_status()
         data = response.json()
         print(f"\n✅ Intercom connected")
@@ -84,7 +84,7 @@ def test_connection(access_token: str = None) -> bool:
 def intercom_get(endpoint: str, access_token: str, params: dict = None) -> dict:
     """Make authenticated GET request to Intercom."""
     url = f"{INTERCOM_BASE_URL}/{endpoint}"
-    response = requests.get(url, headers=_make_headers(access_token), params=params or {})
+    response = requests.get(url, headers=_make_headers(access_token), params=params or {}, timeout=30)
     response.raise_for_status()
     return response.json()
 
@@ -92,7 +92,7 @@ def intercom_get(endpoint: str, access_token: str, params: dict = None) -> dict:
 def intercom_post(endpoint: str, access_token: str, payload: dict) -> dict:
     """Make authenticated POST request to Intercom (for search)."""
     url = f"{INTERCOM_BASE_URL}/{endpoint}"
-    response = requests.post(url, headers=_make_headers(access_token), json=payload)
+    response = requests.post(url, headers=_make_headers(access_token), json=payload, timeout=30)
     response.raise_for_status()
     return response.json()
 

@@ -61,7 +61,7 @@ def _get_auth(key_id: str, key_secret: str) -> tuple:
 def razorpay_get(endpoint: str, key_id: str, key_secret: str, params: dict = None) -> dict:
     """Make an authenticated GET request to Razorpay API."""
     url = f"{RAZORPAY_BASE_URL}/{endpoint}"
-    response = requests.get(url, auth=_get_auth(key_id, key_secret), params=params or {})
+    response = requests.get(url, auth=_get_auth(key_id, key_secret), params=params or {}, timeout=30)
     response.raise_for_status()
     return response.json()
 

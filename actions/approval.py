@@ -19,6 +19,7 @@ Trust modes (configurable per company):
 """
 
 from __future__ import annotations
+import logging
 import uuid
 from pathlib import Path
 from datetime import datetime
@@ -84,8 +85,8 @@ def get_trust_mode(company_id: str | None = None) -> str:
         )
         if not df.empty:
             return str(df.iloc[0]["trust_mode"])
-    except Exception:
-        pass
+    except Exception as exc:  # nosec B110 — table may not exist yet; return safe default
+        logging.getLogger(__name__).debug("get_trust_mode fallback: %s", exc)
     return TRUST_MODE_FULL
 
 
@@ -397,5 +398,6 @@ def get_approval_history(
             params=(cid, limit)
         )
         return df.to_dict("records")
-    except Exception:
+    except Exception as exc:  # nosec B110 — approval_log table may not exist in older schemas
+        logging.getLogger(__name__).debug("get_approval_log fallback: %s", exc)
         return []
