@@ -801,7 +801,7 @@ def create_app() -> "FastAPI":
                 detail=f"Invalid trust_mode. Must be one of: {', '.join(sorted(valid_modes))}"
             )
         try:
-            set_trust_mode(company["company_id"], req.trust_mode, req.updated_by)
+            set_trust_mode(req.trust_mode, company["company_id"], req.updated_by)
             return {"trust_mode": req.trust_mode, "updated_by": req.updated_by, "updated": True}
         except Exception:
             raise HTTPException(status_code=500, detail="Failed to update trust mode")
@@ -1112,6 +1112,58 @@ def create_app() -> "FastAPI":
             ],
             "data_summary": status,
         }
+
+    # ── Admin: tenant provisioning ────────────────────────────────────────────
+
+    class ProvisionRequest(BaseModel):
+        company_id:    str
+        company_name:  str
+        num_customers: int = 100
+
+    @app.post("/admin/provision", tags=["Admin"])
+    def provision_tenant_endpoint(
+        req:    ProvisionRequest,
+        _admin: dict = Depends(require_admin),
+    ):
+        """
+        Provision synthetic data for a tenant company_id.
+        Use this to seed dashboard data for a company whose API key
+        was created before their real connector was set up.
+
+        Admin key required.
+        """
+        try:
+            summary = provision_tenant(
+                company_id=req.company_id,
+                company_name=req.company_name,
+                num_customers=req.num_customers,
+            )
+            return summary
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Provision failed: {e}")
+
+    @app.post("/admin/train", tags=["Admin"])
+    def admin_train_for_tenant(
+        company_id: str,
+        _admin:     dict = Depends(require_admin),
+    ):
+        """
+        Run ML training + inference for a specific tenant.
+        Call this after /admin/provision to populate ml_predictions.
+        Admin key required.
+        """
+        try:
+            from models.orchestrator import train_all, run_inference_and_store
+            arts  = train_all(verbose=False, company_id=company_id)
+            preds = run_inference_and_store(company_id=company_id, verbose=False)
+            return {
+                "models_trained":    list(arts.keys()),
+                "customers_scored":  len(preds),
+                "company_id":        company_id,
+                "timestamp":         datetime.now().isoformat(),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Training failed: {e}")
 
     # NOTE: /admin/reset-key and /admin/debug-key have been permanently removed.
     # These were unauthenticated backdoor routes (SEC-NEW-001). Any emergency

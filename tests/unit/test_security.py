@@ -57,7 +57,7 @@ class TestNoBackdoorRoutes:
         route_pattern = re.compile(
             r'@app\.(get|post|put|delete|patch)\(\s*["\']([^"\']+)["\']'
         )
-        protected_pattern = re.compile(r'require_auth|Security\(|Depends\(require_auth')
+        protected_pattern = re.compile(r'require_auth|require_admin|Security\(|Depends\(require')
 
         PUBLIC_PATHS = {"/", "/health", "/docs", "/openapi.json", "/redoc",
                         "/auth/keys", "/auth/keys/{key_id}", "/agent/train"}

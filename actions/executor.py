@@ -180,35 +180,29 @@ def _load_context(
     # ── ml_predictions — scoped by company_id ────────────────────────────────
     # ml_predictions may not have a company_id column in every schema version;
     # we join through customers to enforce scoping.
-    pred_rows = conn.execute(
-        f"""SELECT p.* FROM ml_predictions p  # nosec B608 — placeholders="?,?.." from len(); all values parameterized
-            JOIN customers c ON c.customer_id = p.customer_id
-            WHERE p.customer_id IN ({placeholders})
-              AND c.company_id = ?""",
-        customer_ids + [company_id]
-    ).fetchall()
+    _pred_sql = (  # nosec B608 — placeholders built from len(); all values parameterized
+        f"SELECT p.* FROM ml_predictions p "
+        f"JOIN customers c ON c.customer_id = p.customer_id "
+        f"WHERE p.customer_id IN ({placeholders}) AND c.company_id = ?"
+    )
+    pred_rows = conn.execute(_pred_sql, customer_ids + [company_id]).fetchall()
     pred_cols    = [d[0] for d in conn.execute("SELECT * FROM ml_predictions LIMIT 0").description]
     predictions  = {r[1]: dict(zip(pred_cols, r)) for r in pred_rows}
 
     # ── feature-derived fields — scoped by company_id ────────────────────────
-    feat_rows = conn.execute(
-        f"""SELECT c.customer_id,  # nosec B608 — placeholders="?,?.." from len(); all values parameterized
-               CAST(julianday('now') - julianday(MAX(e.event_date)) AS INTEGER) AS days_since_last_event,
-               COUNT(t.ticket_id) AS open_tickets,
-               AVG(t.sentiment_score) AS avg_sentiment,
-               CAST(julianday('now') - julianday(c.signup_date) AS INTEGER) AS tenure_days
-            FROM customers c
-            LEFT JOIN engagement_events e
-                   ON e.customer_id = c.customer_id AND e.company_id = ?
-            LEFT JOIN support_tickets t
-                   ON t.customer_id = c.customer_id
-                  AND t.status = 'open'
-                  AND t.company_id = ?
-            WHERE c.customer_id IN ({placeholders})
-              AND c.company_id = ?
-            GROUP BY c.customer_id""",
-        [company_id, company_id] + customer_ids + [company_id]
-    ).fetchall()
+    _feat_sql = (  # nosec B608 — placeholders built from len(); all values parameterized
+        "SELECT c.customer_id, "
+        "CAST(julianday('now') - julianday(MAX(e.event_date)) AS INTEGER) AS days_since_last_event, "
+        "COUNT(t.ticket_id) AS open_tickets, "
+        "AVG(t.sentiment_score) AS avg_sentiment, "
+        "CAST(julianday('now') - julianday(c.signup_date) AS INTEGER) AS tenure_days "
+        "FROM customers c "
+        "LEFT JOIN engagement_events e ON e.customer_id = c.customer_id AND e.company_id = ? "
+        "LEFT JOIN support_tickets t ON t.customer_id = c.customer_id AND t.status = 'open' AND t.company_id = ? "
+        f"WHERE c.customer_id IN ({placeholders}) AND c.company_id = ? "
+        "GROUP BY c.customer_id"
+    )
+    feat_rows = conn.execute(_feat_sql, [company_id, company_id] + customer_ids + [company_id]).fetchall()
     for row in feat_rows:
         cid = row[0]
         if cid in customers:
