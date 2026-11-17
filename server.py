@@ -66,6 +66,30 @@ def startup():
     except Exception:
         count = 0
 
+    # Re-tag any rows still using the old 'default' company_id to the shared
+    # demo tenant so the Tester-001 key (and the demo key on the frontend)
+    # immediately sees data without a separate provisioning step.
+    DEMO_COMPANY_ID = "bacabdfa-d035-46bc-90ce-bbe4b3e386e3"
+    try:
+        conn3 = get_connection()
+        retagged = 0
+        for tbl in ("customers", "transactions", "engagement_events",
+                    "support_tickets", "ml_predictions", "agent_actions", "email_log"):
+            try:
+                cur = conn3.execute(
+                    f"UPDATE {tbl} SET company_id=? WHERE company_id='default'",  # nosec B608
+                    (DEMO_COMPANY_ID,)
+                )
+                retagged += cur.rowcount
+            except Exception:
+                pass
+        conn3.commit()
+        conn3.close()
+        if retagged:
+            print(f"   ✅ Re-tagged {retagged} rows → demo tenant")
+    except Exception as e:
+        print(f"   ⚠️  Re-tag skipped: {e}")
+
     if count == 0:
         print("   First boot — creating schema only...")
         try:
@@ -77,16 +101,28 @@ def startup():
             print("   ✅ Schema created")
         except Exception as e:
             print(f"   ⚠️  Schema error: {e}")
-        print("   ℹ️  Use POST /tenants/{id}/provision to load test data")
+        # Provision demo data for the shared demo tenant on first boot
+        try:
+            from utils.tenancy import provision_tenant
+            provision_tenant(
+                company_id=DEMO_COMPANY_ID,
+                company_name="Tester-001",
+                num_customers=100,
+            )
+            print("   ✅ Demo data provisioned (100 customers)")
+        except Exception as e:
+            print(f"   ⚠️  Demo provision skipped: {e}")
     else:
         print(f"   ✅ Database ready ({count} customers)")
-        try:
-            from models.orchestrator import train_all, run_inference_and_store
-            train_all(verbose=False)
-            run_inference_and_store(verbose=False)
-            print("   ✅ Models ready")
-        except Exception as e:
-            print(f"   ⚠️  Model training skipped: {e}")
+
+    # Train models for the demo tenant so dashboard shows scores immediately
+    try:
+        from models.orchestrator import train_all, run_inference_and_store
+        train_all(verbose=False, company_id=DEMO_COMPANY_ID)
+        run_inference_and_store(verbose=False, company_id=DEMO_COMPANY_ID)
+        print("   ✅ Models ready")
+    except Exception as e:
+        print(f"   ⚠️  Model training skipped: {e}")
 
     # Always ensure admin key is valid in DB
     try:

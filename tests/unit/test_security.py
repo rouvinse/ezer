@@ -60,7 +60,8 @@ class TestNoBackdoorRoutes:
         protected_pattern = re.compile(r'require_auth|require_admin|Security\(|Depends\(require')
 
         PUBLIC_PATHS = {"/", "/health", "/docs", "/openapi.json", "/redoc",
-                        "/auth/keys", "/auth/keys/{key_id}", "/agent/train"}
+                        "/auth/keys", "/auth/keys/{key_id}", "/agent/train",
+                        "/auth/register"}
 
         lines = self.src.split("\n")
         unprotected = []

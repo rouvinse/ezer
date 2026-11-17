@@ -1,0 +1,1680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EZER — Autonomous Customer Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --ink:       #0F1623;
+  --navy:      #1A2340;
+  --navy2:     #232E4A;
+  --white:     #FFFFFF;
+  --bg:        #F4F6FF;
+  --accent:    #2D5BE3;
+  --accent-h:  #1E3FA8;
+  --accent-s:  rgba(45,91,227,0.09);
+  --accent-m:  rgba(45,91,227,0.18);
+  --soft:      #8B9CC8;
+  --dim:       #6B7280;
+  --border:    #E2E6F0;
+  --card:      #FFFFFF;
+  --red:       #DC2626;
+  --red-s:     #FEF2F2;
+  --amber:     #D97706;
+  --amber-s:   #FFFBEB;
+  --green:     #16A34A;
+  --green-s:   #F0FDF4;
+  --sidebar-w: 220px;
+}
+
+html { scroll-behavior: smooth; }
+body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--ink); min-height:100vh; -webkit-font-smoothing:antialiased; }
+
+/* ── SCREENS ── */
+.screen { display:none; min-height:100vh; width:100%; }
+.screen.active:not(.app-screen) {
+  display:flex;
+  flex-direction:column;
+  align-items:stretch;
+  width:100vw;
+  min-height:100vh;
+}
+.screen.active:not(.app-screen) .auth-screen,
+.screen.active:not(.app-screen) .onboard-screen {
+  flex:1;
+  width:100%;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+}
+.screen.active { display:flex; }
+
+/* ── AUTH SCREENS ── */
+.auth-screen {
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  padding:32px 20px;
+  background:var(--ink);
+  position:relative;
+  overflow:hidden;
+  width:100%;
+  min-height:100vh;
+}
+
+.auth-bg {
+  position:absolute; inset:0;
+  background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(45,91,227,0.18) 0%, transparent 70%);
+  pointer-events:none;
+}
+
+.auth-card {
+  background:var(--white);
+  border-radius:16px;
+  padding:40px;
+  width:100%;
+  max-width:420px;
+  position:relative;
+  z-index:1;
+}
+
+.auth-logo {
+  font-family:'DM Serif Display',serif;
+  font-size:28px;
+  color:var(--ink);
+  text-align:center;
+  margin-bottom:6px;
+  letter-spacing:-0.5px;
+}
+
+.auth-tagline {
+  font-size:13px;
+  color:var(--dim);
+  text-align:center;
+  margin-bottom:28px;
+}
+
+.auth-title {
+  font-size:20px;
+  font-weight:700;
+  color:var(--ink);
+  margin-bottom:20px;
+}
+
+.form-group { margin-bottom:16px; }
+.form-label { display:block; font-size:12px; font-weight:600; color:var(--dim); margin-bottom:6px; letter-spacing:0.3px; }
+.form-input {
+  width:100%; padding:11px 14px;
+  border:1.5px solid var(--border);
+  border-radius:9px;
+  font-size:14px; font-family:'Inter',sans-serif;
+  color:var(--ink);
+  outline:none;
+  transition:border-color 0.15s;
+}
+.form-input:focus { border-color:var(--accent); }
+
+.btn {
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  width:100%; padding:12px;
+  border-radius:9px; border:none;
+  font-size:14px; font-weight:600; font-family:'Inter',sans-serif;
+  cursor:pointer; transition:all 0.15s;
+}
+.btn-primary { background:var(--accent); color:var(--white); }
+.btn-primary:hover { background:var(--accent-h); }
+.btn-secondary { background:var(--bg); color:var(--ink); border:1.5px solid var(--border); }
+.btn-secondary:hover { border-color:var(--accent); color:var(--accent); }
+.btn-sm { padding:8px 16px; width:auto; font-size:13px; border-radius:8px; }
+.btn-ghost { background:transparent; color:var(--dim); border:1.5px solid var(--border); }
+.btn-ghost:hover { background:var(--bg); }
+.btn-danger { background:var(--red); color:white; }
+.btn-danger:hover { opacity:0.88; }
+
+.auth-switch { text-align:center; margin-top:18px; font-size:13px; color:var(--dim); }
+.auth-switch a { color:var(--accent); text-decoration:none; font-weight:600; cursor:pointer; }
+
+.auth-error {
+  background:var(--red-s); border:1px solid #FECACA;
+  border-radius:8px; padding:10px 14px;
+  font-size:13px; color:var(--red);
+  margin-bottom:16px; display:none;
+}
+
+/* ── ONBOARDING ── */
+.onboard-screen {
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  padding:32px 20px;
+  background:var(--bg);
+  width:100%;
+  min-height:100vh;
+}
+
+.onboard-card {
+  background:var(--white);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:40px;
+  width:100%;
+  max-width:560px;
+}
+
+.onboard-step {
+  display:none;
+}
+.onboard-step.active { display:block; }
+
+.onboard-header { margin-bottom:28px; }
+.onboard-eyebrow { font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:var(--accent); margin-bottom:8px; }
+.onboard-title { font-family:'DM Serif Display',serif; font-size:26px; color:var(--ink); margin-bottom:8px; line-height:1.2; }
+.onboard-sub { font-size:14px; color:var(--dim); line-height:1.6; }
+
+.connector-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:24px; }
+.connector-card {
+  border:1.5px solid var(--border);
+  border-radius:12px;
+  padding:18px 16px;
+  cursor:pointer;
+  transition:all 0.15s;
+  position:relative;
+}
+.connector-card:hover { border-color:var(--accent); background:var(--accent-s); }
+.connector-card.selected { border-color:var(--accent); background:var(--accent-s); }
+.connector-card.selected::after {
+  content:'✓';
+  position:absolute; top:10px; right:12px;
+  color:var(--accent); font-size:13px; font-weight:700;
+}
+.connector-name { font-size:14px; font-weight:600; color:var(--ink); margin-bottom:2px; }
+.connector-desc { font-size:12px; color:var(--dim); }
+
+.trust-options { display:flex; flex-direction:column; gap:12px; margin-bottom:24px; }
+.trust-option {
+  border:1.5px solid var(--border);
+  border-radius:12px;
+  padding:16px;
+  cursor:pointer;
+  transition:all 0.15s;
+}
+.trust-option:hover { border-color:var(--accent); background:var(--accent-s); }
+.trust-option.selected { border-color:var(--accent); background:var(--accent-s); }
+.trust-name { font-size:14px; font-weight:600; color:var(--ink); margin-bottom:3px; }
+.trust-desc { font-size:12px; color:var(--dim); line-height:1.5; }
+
+.progress-bar {
+  height:3px; background:var(--border);
+  border-radius:100px; margin-bottom:28px;
+  overflow:hidden;
+}
+.progress-fill { height:100%; background:var(--accent); border-radius:100px; transition:width 0.3s ease; }
+
+/* ── APP LAYOUT ── */
+.app-screen { flex-direction:row; }
+
+.sidebar {
+  width:var(--sidebar-w);
+  background:var(--ink);
+  flex-shrink:0;
+  display:flex;
+  flex-direction:column;
+  padding:20px 0;
+  position:fixed;
+  top:0; left:0; bottom:0;
+  z-index:50;
+}
+
+.sidebar-logo {
+  font-family:'DM Serif Display',serif;
+  font-size:22px;
+  color:var(--white);
+  padding:0 20px 20px;
+  border-bottom:1px solid rgba(255,255,255,0.07);
+  margin-bottom:16px;
+  letter-spacing:-0.5px;
+}
+
+.sidebar-label {
+  font-size:10px; font-weight:700; letter-spacing:1px;
+  text-transform:uppercase; color:var(--soft);
+  padding:0 20px; margin-bottom:6px;
+}
+
+.sidebar-item {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 20px;
+  font-size:13px; font-weight:500;
+  color:rgba(255,255,255,0.55);
+  cursor:pointer;
+  transition:all 0.12s;
+  border-left:2px solid transparent;
+}
+.sidebar-item:hover { color:var(--white); background:rgba(255,255,255,0.05); }
+.sidebar-item.active { color:var(--white); background:rgba(45,91,227,0.2); border-left-color:var(--accent); }
+.sidebar-item svg { width:16px; height:16px; flex-shrink:0; }
+
+.sidebar-bottom {
+  margin-top:auto;
+  padding:16px 20px;
+  border-top:1px solid rgba(255,255,255,0.07);
+}
+
+.sidebar-user {
+  font-size:12px; color:var(--soft);
+  margin-bottom:12px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+
+.sidebar-mode {
+  display:flex; align-items:center; justify-content:space-between;
+  background:rgba(255,255,255,0.06);
+  border-radius:8px; padding:10px 12px;
+  margin-bottom:10px;
+}
+.sidebar-mode-label { font-size:11px; color:var(--soft); }
+.mode-toggle {
+  background:none; border:none; cursor:pointer;
+  font-size:11px; font-weight:700;
+  padding:3px 8px; border-radius:5px;
+  transition:all 0.15s;
+}
+.mode-safe { background:var(--green-s); color:var(--green); }
+.mode-live { background:var(--red-s); color:var(--red); }
+
+/* ── MAIN CONTENT ── */
+.main-content {
+  margin-left:var(--sidebar-w);
+  flex:1;
+  padding:28px 32px;
+  max-width:calc(100vw - var(--sidebar-w));
+}
+
+.page { display:none; }
+.page.active { display:block; }
+
+.page-header { margin-bottom:24px; }
+.page-title { font-family:'DM Serif Display',serif; font-size:26px; color:var(--ink); margin-bottom:4px; }
+.page-sub { font-size:14px; color:var(--dim); }
+
+/* ── DEMO BANNER ── */
+.demo-banner {
+  background:linear-gradient(135deg,var(--navy) 0%,var(--ink) 100%);
+  border:1px solid rgba(45,91,227,0.3);
+  border-radius:12px;
+  padding:14px 20px;
+  margin-bottom:24px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+}
+.demo-banner p { font-size:13px; color:var(--soft); }
+.demo-banner strong { color:var(--white); }
+.demo-banner-actions { display:flex; gap:8px; flex-shrink:0; }
+
+/* ── KPI GRID ── */
+.kpi-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px; }
+.kpi {
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:18px 20px;
+}
+.kpi-label { font-size:11px; font-weight:600; letter-spacing:0.5px; text-transform:uppercase; color:var(--dim); margin-bottom:8px; }
+.kpi-value { font-family:'DM Serif Display',serif; font-size:30px; color:var(--ink); line-height:1; margin-bottom:3px; }
+.kpi-sub { font-size:12px; color:var(--dim); }
+.kpi.red .kpi-value { color:var(--red); }
+.kpi.green .kpi-value { color:var(--green); }
+.kpi.blue .kpi-value { color:var(--accent); }
+
+/* ── PANEL ── */
+.panel { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:24px; }
+.panel-header {
+  padding:14px 20px;
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between;
+}
+.panel-title { font-size:14px; font-weight:600; color:var(--ink); }
+.panel-meta { font-size:12px; color:var(--dim); }
+
+/* ── TABLE ── */
+.tbl-header {
+  display:grid;
+  padding:10px 20px;
+  background:#FAFBFF;
+  border-bottom:1px solid var(--border);
+  gap:12px;
+}
+.tbl-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--soft); }
+.tbl-row {
+  display:grid;
+  padding:13px 20px;
+  border-bottom:1px solid var(--border);
+  align-items:center;
+  gap:12px;
+  transition:background 0.1s;
+}
+.tbl-row:last-child { border-bottom:none; }
+.tbl-row:hover { background:var(--bg); }
+
+.tbl-customer-name { font-size:14px; font-weight:600; color:var(--ink); }
+.tbl-customer-plan { font-size:12px; color:var(--dim); margin-top:2px; }
+.mono { font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:500; }
+
+/* Risk bar */
+.risk-wrap { display:flex; align-items:center; gap:8px; }
+.risk-bg { flex:1; height:6px; background:var(--border); border-radius:100px; overflow:hidden; }
+.risk-fill { height:100%; border-radius:100px; }
+.risk-pct { font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; min-width:30px; text-align:right; }
+.risk-high .risk-fill { background:var(--red); } .risk-high .risk-pct { color:var(--red); }
+.risk-med  .risk-fill { background:var(--amber); } .risk-med  .risk-pct { color:var(--amber); }
+.risk-low  .risk-fill { background:var(--green); } .risk-low  .risk-pct { color:var(--green); }
+
+/* Badge */
+.badge {
+  display:inline-flex; align-items:center;
+  padding:3px 9px; border-radius:100px;
+  font-size:11px; font-weight:600;
+}
+.badge-red   { background:var(--red-s);   color:var(--red); }
+.badge-amber { background:var(--amber-s); color:var(--amber); }
+.badge-green { background:var(--green-s); color:var(--green); }
+.badge-blue  { background:var(--accent-s); color:var(--accent); }
+
+/* Action pill */
+.action-pill {
+  display:inline-flex; align-items:center; gap:5px;
+  padding:4px 10px; border-radius:7px;
+  font-size:11px; font-weight:500;
+  background:var(--accent-s); color:var(--accent);
+  border:1px solid var(--accent-m);
+}
+
+/* ── APPROVAL ROW ── */
+.approval-row {
+  padding:16px 20px;
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:flex-start; gap:14px;
+}
+.approval-row:last-child { border-bottom:none; }
+.priority-dot {
+  flex-shrink:0; width:28px; height:28px;
+  border-radius:8px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px; font-weight:700; margin-top:1px;
+}
+.p5 { background:var(--red-s); color:var(--red); }
+.p4 { background:var(--amber-s); color:var(--amber); }
+.p3 { background:var(--accent-s); color:var(--accent); }
+.approval-body { flex:1; }
+.approval-name { font-size:14px; font-weight:600; color:var(--ink); margin-bottom:3px; }
+.approval-reason { font-size:12px; color:var(--dim); line-height:1.5; margin-bottom:8px; }
+.approval-btns { display:flex; gap:8px; }
+.btn-approve {
+  padding:5px 14px; border-radius:7px;
+  font-size:12px; font-weight:600;
+  background:var(--green); color:white;
+  border:none; cursor:pointer; transition:opacity 0.15s;
+}
+.btn-approve:hover { opacity:0.85; }
+.btn-reject {
+  padding:5px 14px; border-radius:7px;
+  font-size:12px; font-weight:600;
+  background:transparent; color:var(--dim);
+  border:1px solid var(--border); cursor:pointer; transition:background 0.15s;
+}
+.btn-reject:hover { background:var(--bg); }
+.approval-mrr { flex-shrink:0; text-align:right; }
+.approval-mrr-val { font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:600; color:var(--ink); }
+.approval-mrr-label { font-size:11px; color:var(--dim); }
+
+/* ── CONNECT PAGE ── */
+.connect-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.connect-card {
+  border:1.5px solid var(--border);
+  border-radius:12px; padding:20px;
+  position:relative;
+}
+.connect-card.connected { border-color:var(--green); background:var(--green-s); }
+.connect-name { font-size:15px; font-weight:700; color:var(--ink); margin-bottom:4px; }
+.connect-desc { font-size:13px; color:var(--dim); margin-bottom:16px; line-height:1.5; }
+.connect-time { font-size:11px; color:var(--soft); margin-bottom:16px; }
+.connected-badge {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:4px 10px; border-radius:100px;
+  background:var(--green-s); color:var(--green);
+  font-size:12px; font-weight:600;
+  margin-bottom:12px;
+}
+.pulse-dot { width:7px; height:7px; border-radius:50%; background:var(--green); animation:pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.85)} }
+
+/* ── SEGMENTS ── */
+.seg-row {
+  padding:12px 20px;
+  display:flex; align-items:center; gap:12px;
+  border-bottom:1px solid var(--border);
+}
+.seg-row:last-child { border-bottom:none; }
+.seg-name { font-size:13px; font-weight:500; color:var(--ink); min-width:130px; }
+.seg-bg { flex:1; height:8px; background:var(--bg); border-radius:100px; overflow:hidden; }
+.seg-fill { height:100%; border-radius:100px; background:var(--accent); }
+.seg-count { font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--dim); min-width:45px; text-align:right; }
+
+/* ── SETTINGS ── */
+.settings-section { margin-bottom:28px; }
+.settings-title { font-size:14px; font-weight:700; color:var(--ink); margin-bottom:16px; padding-bottom:10px; border-bottom:1px solid var(--border); }
+.settings-row {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px 0; border-bottom:1px solid var(--border);
+}
+.settings-row:last-child { border-bottom:none; }
+.settings-key { font-size:13px; font-weight:500; color:var(--ink); }
+.settings-val { font-size:13px; color:var(--dim); font-family:'JetBrains Mono',monospace; }
+.api-key-display {
+  background:var(--bg); border:1px solid var(--border);
+  border-radius:8px; padding:10px 14px;
+  font-family:'JetBrains Mono',monospace; font-size:12px;
+  color:var(--ink); word-break:break-all;
+  margin-bottom:12px;
+}
+
+/* ── LOADING / EMPTY ── */
+.spinner { width:28px; height:28px; border:2.5px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to{transform:rotate(360deg)} }
+.loading { display:flex; flex-direction:column; align-items:center; gap:10px; padding:48px 20px; }
+.loading-text { font-size:13px; color:var(--dim); }
+.empty { padding:40px 20px; text-align:center; font-size:14px; color:var(--dim); line-height:1.6; }
+
+/* ── TOAST ── */
+.toast {
+  position:fixed; bottom:24px; right:24px;
+  background:var(--ink); color:var(--white);
+  padding:12px 18px; border-radius:10px;
+  font-size:13px; font-weight:500;
+  box-shadow:0 4px 20px rgba(0,0,0,0.2);
+  z-index:1000;
+  transform:translateY(80px); opacity:0;
+  transition:all 0.25s ease;
+}
+.toast.show { transform:translateY(0); opacity:1; }
+.toast.success { background:var(--green); }
+.toast.error { background:var(--red); }
+
+/* ── MOBILE NAV ── */
+.hamburger{
+  display:none;position:fixed;top:14px;left:14px;z-index:1000;
+  background:var(--card);border:1px solid var(--border);border-radius:8px;
+  width:40px;height:40px;align-items:center;justify-content:center;
+  cursor:pointer;color:var(--white);
+}
+.mobile-overlay{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:900;
+}
+/* ── RESPONSIVE ── */
+@media(max-width:768px){
+  .hamburger{display:flex}
+  .sidebar{
+    position:fixed;left:-240px;top:0;height:100vh;z-index:950;
+    transition:left .25s ease;
+  }
+  .sidebar.open{left:0}
+  .mobile-overlay.open{display:block}
+  .main-content{margin-left:0;padding:20px 16px;padding-top:64px}
+  .kpi-grid{grid-template-columns:1fr 1fr}
+  .connect-grid{grid-template-columns:1fr}
+  .tbl-row,.tbl-header{grid-template-columns:1fr 1fr!important}
+}
+
+/* ── GRID TEMPLATES ── */
+.grid-customers { grid-template-columns:2.2fr .8fr 1.4fr 1fr 1.6fr; }
+</style>
+</head>
+<body>
+
+<!-- ═══ SIGN UP SCREEN ═══ -->
+<div class="screen active" id="screen-signup" style="width:100%">
+  <div class="auth-screen" style="flex:1;width:100%">
+    <div class="auth-bg"></div>
+    <div class="auth-card">
+      <div class="auth-logo">EZER</div>
+      <div class="auth-tagline">Autonomous Customer Intelligence</div>
+      <div class="auth-title">Create your account</div>
+      <div class="auth-error" id="signup-error"></div>
+      <div class="form-group">
+        <label class="form-label">Full name</label>
+        <input class="form-input" id="signup-name" type="text" placeholder="Rouvin Ebenezer">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Work email</label>
+        <input class="form-input" id="signup-email" type="email" placeholder="you@company.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input class="form-input" id="signup-password" type="password" placeholder="At least 8 characters">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Company name</label>
+        <input class="form-input" id="signup-company" type="text" placeholder="Acme SaaS Inc.">
+      </div>
+      <button class="btn btn-primary" onclick="handleSignup()">Create account — free 60-day pilot</button>
+      <div class="auth-switch">Already have an account? <a onclick="showScreen('screen-login')">Sign in</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ LOGIN SCREEN ═══ -->
+<div class="screen" id="screen-login" style="width:100%">
+  <div class="auth-screen" style="flex:1;width:100%">
+    <div class="auth-bg"></div>
+    <div class="auth-card">
+      <div class="auth-logo">EZER</div>
+      <div class="auth-tagline">Autonomous Customer Intelligence</div>
+      <div class="auth-title">Sign in</div>
+      <div class="auth-error" id="login-error"></div>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input class="form-input" id="login-email" type="email" placeholder="you@company.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input class="form-input" id="login-password" type="password" placeholder="Your password">
+      </div>
+      <button class="btn btn-primary" onclick="handleLogin()">Sign in</button>
+      <div class="auth-switch">No account yet? <a onclick="showScreen('screen-signup')">Start free pilot</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ONBOARDING SCREEN ═══ -->
+<div class="screen" id="screen-onboard" style="width:100%">
+  <div class="onboard-screen" style="flex:1;width:100%">
+    <div class="onboard-card">
+      <div class="progress-bar"><div class="progress-fill" id="onboard-progress" style="width:33%"></div></div>
+
+      <!-- Step 1: Choose connector -->
+      <div class="onboard-step active" id="step-1">
+        <div class="onboard-header">
+          <div class="onboard-eyebrow">Step 1 of 3</div>
+          <div class="onboard-title">Connect your tools</div>
+          <div class="onboard-sub">Choose which tool to connect first. EZER pulls your customer data automatically — no manual exports needed.</div>
+        </div>
+        <div class="connector-grid">
+          <div class="connector-card" onclick="selectConnector('stripe',this)">
+            <div class="connector-name">Stripe</div>
+            <div class="connector-desc">Billing, subscriptions, MRR · 2 min setup</div>
+          </div>
+          <div class="connector-card" onclick="selectConnector('razorpay',this)">
+            <div class="connector-name">Razorpay</div>
+            <div class="connector-desc">Payments & subscriptions · 2 min setup</div>
+          </div>
+          <div class="connector-card" onclick="selectConnector('hubspot',this)">
+            <div class="connector-name">HubSpot</div>
+            <div class="connector-desc">CRM, contacts, deals · 5 min setup</div>
+          </div>
+          <div class="connector-card" onclick="selectConnector('intercom',this)">
+            <div class="connector-name">Intercom</div>
+            <div class="connector-desc">Support & conversations · 3 min setup</div>
+          </div>
+          <div class="connector-card" onclick="selectConnector('salesforce',this)">
+            <div class="connector-name">Salesforce</div>
+            <div class="connector-desc">Full CRM — accounts, contacts, opportunities · 10 min setup</div>
+          </div>
+          <div class="connector-card" onclick="selectConnector('demo',this)">
+            <div class="connector-name">Try with demo data first</div>
+            <div class="connector-desc">See EZER on 500 synthetic customers — connect tools later</div>
+          </div>
+        </div>
+        <!-- Credential inputs — shown when a real connector is selected -->
+        <div id="connector-creds" style="display:none;margin-top:16px;background:var(--bg);border-radius:12px;padding:16px;border:1px solid var(--border)">
+          <!-- Stripe -->
+          <div id="creds-stripe" style="display:none">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">Stripe Secret Key</div>
+            <input id="stripe-key" type="password" class="input" placeholder="sk_live_…" style="margin-bottom:4px">
+            <div style="font-size:11px;color:var(--dim)">From <a href="https://dashboard.stripe.com/apikeys" target="_blank" style="color:var(--accent)">dashboard.stripe.com/apikeys</a></div>
+          </div>
+          <!-- Razorpay -->
+          <div id="creds-razorpay" style="display:none">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">Razorpay Credentials</div>
+            <input id="razorpay-key-id" type="text" class="input" placeholder="rzp_live_…  Key ID" style="margin-bottom:8px">
+            <input id="razorpay-key-secret" type="password" class="input" placeholder="Key Secret">
+            <div style="font-size:11px;color:var(--dim);margin-top:4px">From <a href="https://dashboard.razorpay.com/app/keys" target="_blank" style="color:var(--accent)">dashboard.razorpay.com/app/keys</a></div>
+          </div>
+          <!-- HubSpot -->
+          <div id="creds-hubspot" style="display:none">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">HubSpot Private App Token</div>
+            <input id="hubspot-token" type="password" class="input" placeholder="pat-na1-…">
+            <div style="font-size:11px;color:var(--dim);margin-top:4px">From HubSpot → Settings → Integrations → Private Apps</div>
+          </div>
+          <!-- Intercom -->
+          <div id="creds-intercom" style="display:none">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">Intercom Access Token</div>
+            <input id="intercom-token" type="password" class="input" placeholder="dG9rOi…">
+            <div style="font-size:11px;color:var(--dim);margin-top:4px">From Intercom → Settings → Developer Hub → Your App</div>
+          </div>
+          <!-- Salesforce -->
+          <div id="creds-salesforce" style="display:none">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">Salesforce Credentials</div>
+            <input id="sf-username" type="text" class="input" placeholder="Username" style="margin-bottom:8px">
+            <input id="sf-password" type="password" class="input" placeholder="Password" style="margin-bottom:8px">
+            <input id="sf-token" type="password" class="input" placeholder="Security Token" style="margin-bottom:8px">
+            <input id="sf-client-id" type="text" class="input" placeholder="Connected App Client ID" style="margin-bottom:8px">
+            <input id="sf-client-secret" type="password" class="input" placeholder="Client Secret">
+          </div>
+          <div id="creds-skip-note" style="display:none;font-size:12px;color:var(--dim)">You can connect your tools later from the Integrations page.</div>
+        </div>
+
+        <button class="btn btn-primary" style="margin-top:16px" onclick="nextStep(2)">Continue →</button>
+      </div>
+
+      <!-- Step 2: Trust mode -->
+      <div class="onboard-step" id="step-2">
+        <div class="onboard-header">
+          <div class="onboard-eyebrow">Step 2 of 3</div>
+          <div class="onboard-title">How much should EZER act on its own?</div>
+          <div class="onboard-sub">You can change this anytime. Start cautious and graduate to more autonomy as you see EZER work.</div>
+        </div>
+        <div class="trust-options">
+          <div class="trust-option selected" onclick="selectTrust('safe',this)">
+            <div class="trust-name">Safe mode — I review everything first</div>
+            <div class="trust-desc">Every action EZER wants to take goes to your approval queue. Nothing sends without your say-so. Best for getting started.</div>
+          </div>
+          <div class="trust-option" onclick="selectTrust('high',this)">
+            <div class="trust-name">High-risk only — routine things go, big decisions come to me</div>
+            <div class="trust-desc">Check-ins and health emails send automatically. Escalations and large retention offers need your approval.</div>
+          </div>
+          <div class="trust-option" onclick="selectTrust('auto',this)">
+            <div class="trust-name">Fully automatic — EZER handles everything</div>
+            <div class="trust-desc">EZER acts on every customer without interruption. Review the results in the dashboard. Best once you trust the system.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <button class="btn btn-ghost btn-sm" onclick="nextStep(1)">← Back</button>
+          <button class="btn btn-primary" style="flex:1" onclick="nextStep(3)">Continue →</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Ready -->
+      <div class="onboard-step" id="step-3">
+        <div class="onboard-header">
+          <div class="onboard-eyebrow">Step 3 of 3</div>
+          <div class="onboard-title">You're ready.</div>
+          <div class="onboard-sub">EZER is setting up your account and scoring your customers. This takes about 30 seconds.</div>
+        </div>
+        <div style="background:var(--bg);border-radius:12px;padding:20px;margin-bottom:24px">
+          <div id="setup-steps">
+            <div class="setup-item" id="setup-1" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;color:var(--dim)">
+              <div class="spinner" style="width:16px;height:16px;border-width:2px"></div> Loading your customers...
+            </div>
+            <div class="setup-item" id="setup-2" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;color:var(--dim);opacity:0.4">
+              <div style="width:16px;height:16px;border-radius:50%;background:var(--border)"></div> Scoring churn risk...
+            </div>
+            <div class="setup-item" id="setup-3" style="display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px;color:var(--dim);opacity:0.4">
+              <div style="width:16px;height:16px;border-radius:50%;background:var(--border)"></div> Preparing your dashboard...
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="go-dashboard-btn" style="display:none" onclick="goDashboard()">Open my dashboard →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ APP SCREEN ═══ -->
+<div class="screen" id="screen-app">
+
+  <!-- Mobile hamburger + overlay -->
+  <div class="hamburger" id="hamburger" onclick="toggleSidebar()">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </div>
+  <div class="mobile-overlay" id="mobile-overlay" onclick="toggleSidebar()"></div>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-logo">EZER</div>
+
+    <div class="sidebar-label">Monitor</div>
+    <div class="sidebar-item active" onclick="showPage('dashboard',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </div>
+    <div class="sidebar-item" onclick="showPage('churn',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Churn risk
+    </div>
+    <div class="sidebar-item" onclick="showPage('upgrades',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+      Upgrade signals
+    </div>
+
+    <div class="sidebar-label" style="margin-top:16px">Actions</div>
+    <div class="sidebar-item" onclick="showPage('approvals',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      Approval queue <span id="queue-badge" style="margin-left:auto;background:var(--red);color:white;font-size:10px;font-weight:700;padding:2px 6px;border-radius:100px;display:none"></span>
+    </div>
+
+    <div class="sidebar-label" style="margin-top:16px">Account</div>
+    <div class="sidebar-item" onclick="showPage('connect',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+      Connections
+    </div>
+    <div class="sidebar-item" onclick="showPage('settings',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Settings
+    </div>
+
+    <div class="sidebar-bottom">
+      <div class="sidebar-user" id="sidebar-user-email">—</div>
+      <div class="sidebar-mode">
+        <div class="sidebar-mode-label">Trust mode</div>
+        <button class="mode-toggle mode-safe" id="mode-btn" onclick="toggleMode()">Safe</button>
+      </div>
+      <button class="btn btn-ghost btn-sm" style="width:100%;font-size:12px" onclick="logout()">Sign out</button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="main-content">
+
+    <!-- DASHBOARD PAGE -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div class="page-title">Dashboard</div>
+        <div class="page-sub" id="dash-sub">Loading your customer data...</div>
+      </div>
+
+      <div class="demo-banner" id="demo-banner" style="display:none">
+        <div><strong>You're on demo data.</strong> <p>Connect Stripe or HubSpot to see EZER working on your real customers.</p></div>
+        <div class="demo-banner-actions">
+          <button class="btn btn-primary btn-sm" onclick="showPage('connect',document.querySelector('.sidebar-item:nth-child(10)'))">Connect my tools</button>
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi"><div class="kpi-label">Customers</div><div class="kpi-value" id="kpi-total">—</div><div class="kpi-sub">being monitored</div></div>
+        <div class="kpi"><div class="kpi-label">MRR</div><div class="kpi-value" id="kpi-mrr">—</div><div class="kpi-sub">monthly recurring</div></div>
+        <div class="kpi red"><div class="kpi-label">High risk</div><div class="kpi-value" id="kpi-risk">—</div><div class="kpi-sub">may churn soon</div></div>
+        <div class="kpi blue"><div class="kpi-label">Pending review</div><div class="kpi-value" id="kpi-pending">—</div><div class="kpi-sub">actions waiting</div></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Highest churn risk right now</div>
+            <div class="panel-meta" id="dash-churn-count">—</div>
+          </div>
+          <div class="tbl-header grid-customers">
+            <div class="tbl-label">Customer</div>
+            <div class="tbl-label">MRR</div>
+            <div class="tbl-label">Churn risk</div>
+            <div class="tbl-label">Segment</div>
+            <div class="tbl-label">Action</div>
+          </div>
+          <div id="dash-churn-list"><div class="loading"><div class="spinner"></div><div class="loading-text">Scoring customers...</div></div></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Segments</div>
+          </div>
+          <div id="dash-segments"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CHURN PAGE -->
+    <div class="page" id="page-churn">
+      <div class="page-header">
+        <div class="page-title">Churn risk</div>
+        <div class="page-sub">Every customer scored by likelihood to cancel in the next 30 days.</div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">All customers by churn risk</div>
+          <div class="panel-meta" id="churn-count">—</div>
+        </div>
+        <div class="tbl-header grid-customers">
+          <div class="tbl-label">Customer</div>
+          <div class="tbl-label">MRR</div>
+          <div class="tbl-label">Churn risk</div>
+          <div class="tbl-label">Segment</div>
+          <div class="tbl-label">What EZER will do</div>
+        </div>
+        <div id="churn-list"><div class="loading"><div class="spinner"></div><div class="loading-text">Loading predictions...</div></div></div>
+      </div>
+    </div>
+
+    <!-- UPGRADES PAGE -->
+    <div class="page" id="page-upgrades">
+      <div class="page-header">
+        <div class="page-title">Upgrade signals</div>
+        <div class="page-sub">Customers showing signs they're ready to expand — hitting limits, high engagement, growing team.</div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Upgrade opportunities</div>
+          <div class="panel-meta" id="upgrade-count">—</div>
+        </div>
+        <div class="tbl-header grid-customers">
+          <div class="tbl-label">Customer</div>
+          <div class="tbl-label">MRR</div>
+          <div class="tbl-label">Upgrade likelihood</div>
+          <div class="tbl-label">Segment</div>
+          <div class="tbl-label">What EZER will do</div>
+        </div>
+        <div id="upgrade-list"><div class="loading"><div class="spinner"></div><div class="loading-text">Loading upgrade signals...</div></div></div>
+      </div>
+    </div>
+
+    <!-- APPROVALS PAGE -->
+    <div class="page" id="page-approvals">
+      <div class="page-header">
+        <div class="page-title">Approval queue</div>
+        <div class="page-sub">Actions EZER wants to take. Review and approve before anything sends — or switch to automatic mode.</div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Pending actions</div>
+          <div><button class="btn btn-primary btn-sm" onclick="approveAll()">Approve all</button></div>
+        </div>
+        <div id="approval-list"><div class="loading"><div class="spinner"></div><div class="loading-text">Loading queue...</div></div></div>
+      </div>
+    </div>
+
+    <!-- CONNECT PAGE -->
+    <div class="page" id="page-connect">
+      <div class="page-header">
+        <div class="page-title">Connections</div>
+        <div class="page-sub">Connect your tools and EZER starts watching your customers automatically. Each connector takes under 5 minutes.</div>
+      </div>
+      <div class="connect-grid">
+
+        <!-- STRIPE -->
+        <div class="connect-card" id="card-stripe">
+          <div class="connect-name">Stripe</div>
+          <div class="connect-desc">Pulls subscription status, MRR, payment failures, and billing history.</div>
+          <div class="connect-time">Setup: 2 min · dashboard.stripe.com/apikeys</div>
+          <div id="stripe-form">
+            <input class="form-input" id="stripe-key" type="password" placeholder="sk_test_... or sk_live_..." style="margin-bottom:8px;font-family:monospace;font-size:12px">
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" onclick="testConnector('stripe')">Test</button>
+              <button class="btn btn-primary btn-sm" onclick="connectConnector('stripe')">Connect Stripe</button>
+            </div>
+            <div id="stripe-msg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+          </div>
+        </div>
+
+        <!-- RAZORPAY -->
+        <div class="connect-card" id="card-razorpay">
+          <div class="connect-name">Razorpay</div>
+          <div class="connect-desc">Pulls payment data and subscription history. Best for India-based billing.</div>
+          <div class="connect-time">Setup: 2 min · dashboard.razorpay.com/app/keys</div>
+          <div id="razorpay-form">
+            <input class="form-input" id="razorpay-key-id" type="text" placeholder="Key ID (rzp_live_...)" style="margin-bottom:6px;font-family:monospace;font-size:12px">
+            <input class="form-input" id="razorpay-key-secret" type="password" placeholder="Key Secret" style="margin-bottom:8px;font-family:monospace;font-size:12px">
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" onclick="testConnector('razorpay')">Test</button>
+              <button class="btn btn-primary btn-sm" onclick="connectConnector('razorpay')">Connect Razorpay</button>
+            </div>
+            <div id="razorpay-msg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+          </div>
+        </div>
+
+        <!-- HUBSPOT -->
+        <div class="connect-card" id="card-hubspot">
+          <div class="connect-name">HubSpot</div>
+          <div class="connect-desc">Pulls contacts, companies, deals, and engagement data. Adds full CRM context to every customer score.</div>
+          <div class="connect-time">Setup: 5 min · app.hubspot.com/private-apps</div>
+          <div id="hubspot-form">
+            <input class="form-input" id="hubspot-token" type="password" placeholder="Private App Access Token (pat-...)" style="margin-bottom:8px;font-family:monospace;font-size:12px">
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" onclick="testConnector('hubspot')">Test</button>
+              <button class="btn btn-primary btn-sm" onclick="connectConnector('hubspot')">Connect HubSpot</button>
+            </div>
+            <div id="hubspot-msg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+          </div>
+        </div>
+
+        <!-- INTERCOM -->
+        <div class="connect-card" id="card-intercom">
+          <div class="connect-name">Intercom</div>
+          <div class="connect-desc">Pulls support conversations and sentiment. Catches frustrated customers before they escalate.</div>
+          <div class="connect-time">Setup: 3 min · app.intercom.com/a/apps/_/settings/keys</div>
+          <div id="intercom-form">
+            <input class="form-input" id="intercom-token" type="password" placeholder="Access Token" style="margin-bottom:8px;font-family:monospace;font-size:12px">
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" onclick="testConnector('intercom')">Test</button>
+              <button class="btn btn-primary btn-sm" onclick="connectConnector('intercom')">Connect Intercom</button>
+            </div>
+            <div id="intercom-msg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+          </div>
+        </div>
+
+        <!-- SALESFORCE -->
+        <div class="connect-card" id="card-salesforce" style="grid-column:span 2">
+          <div class="connect-name">Salesforce</div>
+          <div class="connect-desc">Pulls accounts, contacts, opportunities, and activity history. Best for teams already using Salesforce as their CRM.</div>
+          <div class="connect-time">Setup: 10 min · Requires Connected App credentials</div>
+          <div id="salesforce-form" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <input class="form-input" id="sf-username" type="text" placeholder="Salesforce Username" style="font-size:12px">
+            <input class="form-input" id="sf-password" type="password" placeholder="Password" style="font-size:12px">
+            <input class="form-input" id="sf-token" type="password" placeholder="Security Token" style="font-size:12px">
+            <input class="form-input" id="sf-client-id" type="text" placeholder="Connected App Client ID" style="font-size:12px">
+            <input class="form-input" id="sf-client-secret" type="password" placeholder="Connected App Client Secret" style="font-size:12px">
+            <input class="form-input" id="sf-domain" type="text" placeholder="Domain (default: login)" style="font-size:12px" value="login">
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" onclick="testConnector('salesforce')">Test connection</button>
+            <button class="btn btn-primary btn-sm" onclick="connectConnector('salesforce')">Connect Salesforce</button>
+          </div>
+          <div id="salesforce-msg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+        </div>
+
+      </div>
+      <div style="margin-top:16px;font-size:13px;color:var(--dim);padding:16px;background:var(--card);border:1px solid var(--border);border-radius:12px">
+        <strong style="color:var(--ink)">Coming soon:</strong> Freshdesk, Mixpanel, Amplitude, Chargebee, Pipedrive, Zendesk, Segment, Klaviyo.
+        Using something else? <a href="mailto:founder@ezercrmai.com" style="color:var(--accent)">Let us know.</a>
+      </div>
+    </div>
+
+    <!-- SETTINGS PAGE -->
+    <div class="page" id="page-settings">
+      <div class="page-header">
+        <div class="page-title">Settings</div>
+        <div class="page-sub">Manage your account and preferences.</div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-title">Account</div>
+        <div class="settings-row"><div class="settings-key">Name</div><div class="settings-val" id="set-name">—</div></div>
+        <div class="settings-row"><div class="settings-key">Email</div><div class="settings-val" id="set-email">—</div></div>
+        <div class="settings-row"><div class="settings-key">Company</div><div class="settings-val" id="set-company">—</div></div>
+        <div class="settings-row"><div class="settings-key">Plan</div><div class="settings-val"><span class="badge badge-green">Free pilot (60 days)</span></div></div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-title">Trust mode</div>
+        <div class="trust-options" id="settings-trust">
+          <div class="trust-option selected" onclick="setTrustMode('safe',this)">
+            <div class="trust-name">Safe mode</div>
+            <div class="trust-desc">Every action goes to approval queue first. Nothing sends without your review.</div>
+          </div>
+          <div class="trust-option" onclick="setTrustMode('high',this)">
+            <div class="trust-name">High-risk only</div>
+            <div class="trust-desc">Routine emails send automatically. Big decisions need your approval.</div>
+          </div>
+          <div class="trust-option" onclick="setTrustMode('auto',this)">
+            <div class="trust-name">Fully automatic</div>
+            <div class="trust-desc">EZER handles everything. Review results in the dashboard.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-title">API access</div>
+        <div class="api-key-display" id="set-apikey">Loading...</div>
+        <button class="btn btn-secondary btn-sm" onclick="copyApiKey()">Copy API key</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── STATE ──
+const API = 'https://ezer-production.up.railway.app';
+const DEMO_KEY = 'acia_live_sk_b25f732dc5606bcd801444b43f77f2089f7c083caf7a7a3fc4e5fe1a200de4ea';
+
+let state = {
+  user: null,
+  apiKey: null,
+  trustMode: 'safe',
+  isDemo: false,
+  connector: null,
+};
+
+function headers() {
+  return { 'X-API-Key': state.apiKey || DEMO_KEY, 'Content-Type': 'application/json' };
+}
+
+// ── SCREEN MANAGEMENT ──
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const ov = document.getElementById('mobile-overlay');
+  sb.classList.toggle('open');
+  ov.classList.toggle('open');
+}
+
+function showPage(id, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+  if (el) el.classList.add('active');
+  // Close sidebar on mobile after navigation
+  const sb = document.getElementById('sidebar');
+  const ov = document.getElementById('mobile-overlay');
+  if (sb) sb.classList.remove('open');
+  if (ov) ov.classList.remove('open');
+  loadPage(id);
+}
+
+// ── TOAST ──
+function toast(msg, type='') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  setTimeout(() => t.className = 'toast', 2800);
+}
+
+// ── AUTH ──
+async function handleSignup() {
+  const name    = document.getElementById('signup-name').value.trim();
+  const email   = document.getElementById('signup-email').value.trim();
+  const pass    = document.getElementById('signup-password').value;
+  const company = document.getElementById('signup-company').value.trim();
+
+  if (!name || !email || !pass || !company) {
+    showError('signup-error', 'Please fill in all fields.');
+    return;
+  }
+  if (pass.length < 8) {
+    showError('signup-error', 'Password must be at least 8 characters.');
+    return;
+  }
+
+  // Show loading state
+  const btn = document.querySelector('#screen-signup .btn-primary');
+  const origText = btn.textContent;
+  btn.textContent = 'Creating your account…';
+  btn.disabled = true;
+  document.getElementById('signup-error').style.display = 'none';
+
+  try {
+    const r = await fetch(`${API}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password: pass, company_name: company }),
+    });
+    const d = await r.json();
+
+    if (!r.ok) {
+      showError('signup-error', d.detail || 'Signup failed. Try again.');
+      btn.textContent = origText;
+      btn.disabled = false;
+      return;
+    }
+
+    // Store the unique API key issued for this company
+    state.user   = { name, email, company };
+    state.apiKey = d.api_key;
+    localStorage.setItem('ezer_user',      JSON.stringify(state.user));
+    localStorage.setItem('ezer_apikey',    d.api_key);
+    localStorage.setItem('ezer_companyid', d.company_id);
+
+    showScreen('screen-onboard');
+  } catch(err) {
+    // Network error — fall back to demo key so the app still works
+    state.user   = { name, email, company };
+    state.apiKey = DEMO_KEY;
+    localStorage.setItem('ezer_user',   JSON.stringify(state.user));
+    localStorage.setItem('ezer_apikey', DEMO_KEY);
+    showScreen('screen-onboard');
+  } finally {
+    btn.textContent = origText;
+    btn.disabled = false;
+  }
+}
+
+function handleLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const pass = document.getElementById('login-password').value;
+
+  if (!email || !pass) {
+    showError('login-error', 'Please enter your email and password.');
+    return;
+  }
+
+  const saved = localStorage.getItem('ezer_user');
+  if (!saved) {
+    showError('login-error', 'No account found. Sign up first.');
+    return;
+  }
+
+  state.user = JSON.parse(saved);
+  state.apiKey = localStorage.getItem('ezer_apikey') || DEMO_KEY;
+  state.isDemo = !localStorage.getItem('ezer_apikey');
+  state.trustMode = localStorage.getItem('ezer_trust') || 'safe';
+  enterApp();
+}
+
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function logout() {
+  state = { user: null, apiKey: null, trustMode: 'safe', isDemo: false, connector: null };
+  showScreen('screen-login');
+}
+
+// ── ONBOARDING ──
+let selectedConnector = null;
+let selectedTrust = 'safe';
+
+function selectConnector(type, el) {
+  document.querySelectorAll('.connector-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedConnector = type;
+
+  // Show/hide credential inputs
+  const credsPanel = document.getElementById('connector-creds');
+  const realConnectors = ['stripe','razorpay','hubspot','intercom','salesforce'];
+  document.querySelectorAll('[id^="creds-"]').forEach(d => d.style.display = 'none');
+
+  if (realConnectors.includes(type)) {
+    credsPanel.style.display = 'block';
+    const panel = document.getElementById('creds-' + type);
+    if (panel) panel.style.display = 'block';
+  } else {
+    // demo — hide creds, show skip note
+    credsPanel.style.display = 'block';
+    document.getElementById('creds-skip-note').style.display = 'block';
+  }
+}
+
+function selectTrust(type, el) {
+  document.querySelectorAll('#step-2 .trust-option').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedTrust = type;
+}
+
+function nextStep(step) {
+  if (step === 2 && !selectedConnector) {
+    toast('Please choose a connector or demo data to continue.', 'error');
+    return;
+  }
+  document.querySelectorAll('.onboard-step').forEach(s => s.classList.remove('active'));
+  document.getElementById('step-'+step).classList.add('active');
+  document.getElementById('onboard-progress').style.width = (step/3*100)+'%';
+
+  if (step === 3) runSetup();
+}
+
+async function runSetup() {
+  state.isDemo = selectedConnector === 'demo';
+  state.trustMode = selectedTrust;
+  state.connector = selectedConnector;
+
+  // Use the key created at signup, or fall back to the shared demo key
+  if (!state.apiKey) {
+    state.apiKey = localStorage.getItem('ezer_apikey') || DEMO_KEY;
+  }
+
+  localStorage.setItem('ezer_trust', state.trustMode);
+
+  // Step 1: load customers
+  // If a real connector was chosen, connect it now to pull live data
+  markSetupStep(1, false);
+  if (selectedConnector && selectedConnector !== 'demo') {
+    try {
+      const params = getConnectorParams(selectedConnector);
+      const hasParams = Object.values(params).some(v => v && v.trim && v.trim());
+      if (hasParams) {
+        const r = await fetch(
+          `${API}/connectors/${selectedConnector}/connect`,
+          { method: 'POST', headers: headers(), body: JSON.stringify(params) }
+        );
+        if (r.ok) {
+          const d = await r.json();
+          state.isDemo = false;
+          if (d.customers || d.contacts) {
+            const count = d.customers || d.contacts;
+            toast(`${count} customers synced from ${selectedConnector}!`, 'success');
+          }
+        }
+      }
+    } catch(_) {}
+  }
+  markSetupStep(1, true);
+
+  // Step 2: score customers (agent cycle)
+  markSetupStep(2, false);
+  try {
+    await fetch(`${API}/agent/run?use_llm=false&dry_run=false`, { method: 'POST', headers: headers() });
+  } catch(_) {}
+  markSetupStep(2, true);
+
+  // Step 3: dashboard ready
+  await delay(600);
+  markSetupStep(3, true);
+
+  document.getElementById('go-dashboard-btn').style.display = 'flex';
+}
+
+function markSetupStep(n, done) {
+  const el = document.getElementById('setup-'+n);
+  el.style.opacity = '1';
+  el.innerHTML = done
+    ? `<div style="width:16px;height:16px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;color:white;font-size:10px;font-weight:700">✓</div> ${['','Customers loaded','Churn scores calculated','Dashboard ready'][n]}`
+    : el.innerHTML;
+
+  if (n < 3) {
+    const next = document.getElementById('setup-'+(n+1));
+    next.style.opacity = '1';
+    next.innerHTML = `<div class="spinner" style="width:16px;height:16px;border-width:2px"></div> ${['','','Scoring churn risk...','Preparing your dashboard...'][n+1]}`;
+  }
+}
+
+function goDashboard() {
+  enterApp();
+}
+
+function enterApp() {
+  updateSidebar();
+  showScreen('screen-app');
+  showPage('dashboard', document.querySelector('.sidebar-item'));
+}
+
+function updateSidebar() {
+  document.getElementById('sidebar-user-email').textContent = state.user?.email || '—';
+  const btn = document.getElementById('mode-btn');
+  if (state.trustMode === 'safe') { btn.textContent = 'Safe'; btn.className = 'mode-toggle mode-safe'; }
+  else if (state.trustMode === 'auto') { btn.textContent = 'Auto'; btn.className = 'mode-toggle mode-live'; }
+  else { btn.textContent = 'Selective'; btn.className = 'mode-toggle mode-safe'; }
+  document.getElementById('set-name').textContent = state.user?.name || '—';
+  document.getElementById('set-email').textContent = state.user?.email || '—';
+  document.getElementById('set-company').textContent = state.user?.company || '—';
+  document.getElementById('set-apikey').textContent = state.apiKey || DEMO_KEY;
+}
+
+function toggleMode() {
+  const modes = ['safe','high','auto'];
+  const idx = modes.indexOf(state.trustMode);
+  state.trustMode = modes[(idx+1) % modes.length];
+  localStorage.setItem('ezer_trust', state.trustMode);
+  updateSidebar();
+  toast('Trust mode updated to ' + state.trustMode, 'success');
+}
+
+// ── DATA LOADING ──
+async function loadPage(id) {
+  if (id === 'dashboard') loadDashboard();
+  else if (id === 'churn') loadChurn();
+  else if (id === 'upgrades') loadUpgrades();
+  else if (id === 'approvals') loadApprovals();
+}
+
+async function loadDashboard() {
+  // Show/hide demo banner
+  document.getElementById('demo-banner').style.display = state.isDemo ? 'flex' : 'none';
+
+  try {
+    const r = await fetch(`${API}/dashboard`, { headers: headers() });
+    const d = await r.json();
+    document.getElementById('kpi-total').textContent = fmt(d.total_customers);
+    document.getElementById('kpi-mrr').textContent = fmtMRR(d.total_mrr);
+    document.getElementById('kpi-risk').textContent = fmt(d.high_risk_count);
+    document.getElementById('kpi-pending').textContent = fmt(d.actions_pending);
+    document.getElementById('dash-sub').textContent = `${fmt(d.total_customers)} customers · ${(d.churn_rate||0).toFixed(1)}% churn rate · Last updated just now`;
+
+    const pending = d.actions_pending || 0;
+    const badge = document.getElementById('queue-badge');
+    if (pending > 0) { badge.textContent = pending; badge.style.display = 'inline'; }
+
+    loadSegments(d.segments);
+  } catch(e) { console.error(e); }
+
+  loadChurnPreview();
+}
+
+function loadSegments(segs) {
+  const container = document.getElementById('dash-segments');
+  if (!segs || !Object.keys(segs).length) {
+    container.innerHTML = '<div class="empty">No segments yet.</div>';
+    return;
+  }
+  const max = Math.max(...Object.values(segs));
+  container.innerHTML = Object.entries(segs).map(([name, count]) => `
+    <div class="seg-row">
+      <div class="seg-name">${name}</div>
+      <div class="seg-bg"><div class="seg-fill" style="width:${Math.round(count/max*100)}%"></div></div>
+      <div class="seg-count">${count}</div>
+    </div>`).join('');
+}
+
+async function loadChurnPreview() {
+  try {
+    const r = await fetch(`${API}/predictions/churn?min_score=0.3&limit=5`, { headers: headers() });
+    const d = await r.json();
+    const preds = d.predictions || [];
+    document.getElementById('dash-churn-count').textContent = `Top ${preds.length} shown`;
+    document.getElementById('dash-churn-list').innerHTML = preds.length
+      ? preds.map(p => customerRow(p, 'churn')).join('')
+      : '<div class="empty">No high-risk customers right now.</div>';
+  } catch(e) {
+    document.getElementById('dash-churn-list').innerHTML = '<div class="empty">Could not load predictions.</div>';
+  }
+}
+
+async function loadChurn() {
+  document.getElementById('churn-list').innerHTML = '<div class="loading"><div class="spinner"></div><div class="loading-text">Loading...</div></div>';
+  try {
+    const r = await fetch(`${API}/predictions/churn?min_score=0&limit=50`, { headers: headers() });
+    const d = await r.json();
+    const preds = d.predictions || [];
+    document.getElementById('churn-count').textContent = `${preds.length} customers`;
+    document.getElementById('churn-list').innerHTML = preds.length
+      ? preds.map(p => customerRow(p, 'churn')).join('')
+      : '<div class="empty">No predictions yet. Run the agent to score customers.</div>';
+  } catch(e) {
+    document.getElementById('churn-list').innerHTML = '<div class="empty">Could not load.</div>';
+  }
+}
+
+async function loadUpgrades() {
+  document.getElementById('upgrade-list').innerHTML = '<div class="loading"><div class="spinner"></div><div class="loading-text">Loading...</div></div>';
+  try {
+    const r = await fetch(`${API}/predictions/conversion?min_score=0.5&limit=30`, { headers: headers() });
+    const d = await r.json();
+    const preds = d.predictions || [];
+    document.getElementById('upgrade-count').textContent = `${preds.length} customers`;
+    document.getElementById('upgrade-list').innerHTML = preds.length
+      ? preds.map(p => customerRow(p, 'upgrade')).join('')
+      : '<div class="empty">No upgrade signals detected.</div>';
+  } catch(e) {
+    document.getElementById('upgrade-list').innerHTML = '<div class="empty">Could not load.</div>';
+  }
+}
+
+async function loadApprovals() {
+  document.getElementById('approval-list').innerHTML = '<div class="loading"><div class="spinner"></div><div class="loading-text">Loading queue...</div></div>';
+  try {
+    const r = await fetch(`${API}/approvals/queue?limit=20`, { headers: headers() });
+    const d = await r.json();
+    const actions = d.actions || [];
+    document.getElementById('approval-list').innerHTML = actions.length
+      ? actions.map(a => approvalRow(a)).join('')
+      : '<div class="empty">Nothing waiting for review.<br>Run the agent to queue new actions.</div>';
+  } catch(e) {
+    document.getElementById('approval-list').innerHTML = '<div class="empty">Could not load queue.</div>';
+  }
+}
+
+// ── ROW BUILDERS ──
+function customerRow(p, type) {
+  const score = type === 'upgrade' ? (p.conversion_score||0) : (p.churn_score||0);
+  const pct = Math.round(score*100);
+  const rc = type === 'upgrade' ? 'risk-low' : (pct>=65?'risk-high':pct>=35?'risk-med':'risk-low');
+  const fillColor = type === 'upgrade' ? 'var(--accent)' : '';
+  const pctColor = type === 'upgrade' ? 'color:var(--accent)' : '';
+  const action = type === 'upgrade' ? 'Send upgrade offer' : actionLabel(pct);
+  return `
+    <div class="tbl-row grid-customers">
+      <div>
+        <div class="tbl-customer-name">${p.name || p.customer_id?.slice(0,10) || '—'}</div>
+        <div class="tbl-customer-plan">${p.plan || '—'}</div>
+      </div>
+      <div class="mono">${fmtMRR(p.mrr)}</div>
+      <div class="${rc}">
+        <div class="risk-wrap">
+          <div class="risk-bg"><div class="risk-fill" style="${fillColor?'background:'+fillColor:''};width:${pct}%"></div></div>
+          <div class="risk-pct" style="${pctColor}">${pct}%</div>
+        </div>
+      </div>
+      <div>${p.segment ? `<span class="badge badge-blue">${p.segment}</span>` : '—'}</div>
+      <div><div class="action-pill">${action}</div></div>
+    </div>`;
+}
+
+function approvalRow(a) {
+  const p = a.priority || 3;
+  const pc = p>=5?'p5':p>=4?'p4':'p3';
+  const pl = p>=5?'P5':p>=4?'P4':'P3';
+  return `
+    <div class="approval-row" id="ar-${a.action_id}">
+      <div class="priority-dot ${pc}">${pl}</div>
+      <div class="approval-body">
+        <div class="approval-name">${a.name || a.customer_id?.slice(0,10) || '—'}</div>
+        <div class="approval-reason">${actionTypeLabel(a.action_type)} — ${a.reason || 'Churn risk detected'}</div>
+        <div class="approval-btns">
+          <button class="btn-approve" onclick="approve('${a.action_id}')">Approve</button>
+          <button class="btn-reject" onclick="reject('${a.action_id}')">Dismiss</button>
+        </div>
+      </div>
+      <div class="approval-mrr">
+        <div class="approval-mrr-val">${fmtMRR(a.mrr)}</div>
+        <div class="approval-mrr-label">MRR</div>
+      </div>
+    </div>`;
+}
+
+async function approve(id) {
+  fadeRow(id);
+  try {
+    const r = await fetch(`${API}/approvals/${id}/approve`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ decided_by: state.user?.email || 'user' }),
+    });
+    if (!r.ok) throw new Error(r.status);
+    toast('Action approved — will execute next cycle', 'success');
+    setTimeout(() => removeRow(id), 300);
+  } catch(e) { unfadeRow(id); toast('Could not approve action.', 'error'); }
+}
+
+async function reject(id) {
+  fadeRow(id);
+  try {
+    const r = await fetch(`${API}/approvals/${id}/reject`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ decided_by: state.user?.email || 'user', rejection_note: 'Dismissed' }),
+    });
+    if (!r.ok) throw new Error(r.status);
+    toast('Action dismissed.');
+    setTimeout(() => removeRow(id), 300);
+  } catch(e) { unfadeRow(id); toast('Could not dismiss action.', 'error'); }
+}
+
+async function approveAll() {
+  try {
+    const r = await fetch(`${API}/approvals/approve-all`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ decided_by: state.user?.email || 'user' }),
+    });
+    if (!r.ok) throw new Error(r.status);
+    toast('All actions approved', 'success');
+    setTimeout(loadApprovals, 500);
+  } catch(e) { toast('Could not approve all.', 'error'); }
+}
+
+function fadeRow(id) { const r = document.getElementById('ar-'+id); if(r){r.style.opacity='.4';r.style.pointerEvents='none';} }
+function unfadeRow(id) { const r = document.getElementById('ar-'+id); if(r){r.style.opacity='1';r.style.pointerEvents='auto';} }
+function removeRow(id) { const r = document.getElementById('ar-'+id); if(r) r.remove(); }
+
+function connectTool(tool) {
+  const card = document.getElementById('card-'+tool);
+  card.classList.add('connected');
+  card.innerHTML = `
+    <div class="connect-name">${tool.charAt(0).toUpperCase()+tool.slice(1)}</div>
+    <div class="connected-badge"><div class="pulse-dot"></div> Connected</div>
+    <div class="connect-desc" style="margin-bottom:0;color:var(--green)">EZER is now pulling your ${tool} data.</div>`;
+  toast(tool.charAt(0).toUpperCase()+tool.slice(1)+' connected successfully!', 'success');
+  state.isDemo = false;
+}
+
+function setTrustMode(mode, el) {
+  document.querySelectorAll('#settings-trust .trust-option').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+  state.trustMode = mode;
+  localStorage.setItem('ezer_trust', mode);
+  updateSidebar();
+  toast('Trust mode saved', 'success');
+}
+
+// ── Universal connector functions ────────────────────────────────────────────
+
+function getConnectorParams(name) {
+  switch(name) {
+    case 'stripe':
+      return { stripe_key: document.getElementById('stripe-key')?.value.trim() };
+    case 'razorpay':
+      return {
+        key_id: document.getElementById('razorpay-key-id')?.value.trim(),
+        key_secret: document.getElementById('razorpay-key-secret')?.value.trim(),
+      };
+    case 'hubspot':
+      return { access_token: document.getElementById('hubspot-token')?.value.trim() };
+    case 'intercom':
+      return { access_token: document.getElementById('intercom-token')?.value.trim() };
+    case 'salesforce':
+      return {
+        username: document.getElementById('sf-username')?.value.trim(),
+        password: document.getElementById('sf-password')?.value.trim(),
+        security_token: document.getElementById('sf-token')?.value.trim(),
+        client_id: document.getElementById('sf-client-id')?.value.trim(),
+        client_secret: document.getElementById('sf-client-secret')?.value.trim(),
+        domain: document.getElementById('sf-domain')?.value.trim() || 'login',
+      };
+    default: return {};
+  }
+}
+
+function setMsg(name, msg, color) {
+  const el = document.getElementById(name + '-msg');
+  if (el) { el.textContent = msg; el.style.color = color || 'var(--dim)'; }
+}
+
+async function testConnector(name) {
+  const params = getConnectorParams(name);
+  // Check all required fields are non-empty strings
+  const emptyFields = Object.entries(params).filter(([k,v]) => !v || !v.trim());
+  if (emptyFields.length) {
+    setMsg(name, 'Please fill in all required fields.', 'var(--red)'); return;
+  }
+  setMsg(name, 'Testing connection...');
+  try {
+    const r = await fetch(
+      `${API}/connectors/${name}/test`,
+      { method: 'POST', headers: headers(), body: JSON.stringify(params), mode: 'cors' }
+    );
+    const d = await r.json();
+    if (r.ok && d.valid) {
+      const detail = d.account_name || d.app_name || d.message || 'Connected';
+      setMsg(name, `✓ ${detail}`, 'var(--green)');
+    } else {
+      setMsg(name, d.detail || 'Connection failed', 'var(--red)');
+    }
+  } catch(e) {
+    setMsg(name, 'Connection failed. Check your credentials.', 'var(--red)');
+  }
+}
+
+async function connectConnector(name) {
+  const params = getConnectorParams(name);
+  const emptyFields = Object.entries(params).filter(([k,v]) => !v || !v.trim());
+  if (emptyFields.length) {
+    setMsg(name, 'Please fill in all required fields.', 'var(--red)'); return;
+  }
+
+  const labels = {
+    stripe: 'Stripe', razorpay: 'Razorpay',
+    hubspot: 'HubSpot', intercom: 'Intercom', salesforce: 'Salesforce'
+  };
+
+  setMsg(name, `Connecting to ${labels[name]} and pulling your customers... This may take 30-60 seconds.`);
+
+  try {
+    const r = await fetch(
+      `${API}/connectors/${name}/connect`,
+      { method: 'POST', headers: headers(), body: JSON.stringify(params), mode: 'cors' }
+    );
+    const d = await r.json();
+
+    if (r.ok) {
+      const card = document.getElementById('card-' + name);
+      card.classList.add('connected');
+      const customerCount = d.customers || d.contacts || 0;
+      const mrr = d.total_mrr || 0;
+      card.innerHTML = `
+        <div class="connect-name">${labels[name]}</div>
+        <div class="connected-badge"><div class="pulse-dot"></div> Connected</div>
+        <div style="font-size:13px;color:var(--green);margin-bottom:8px">
+          ${customerCount} customers synced${mrr > 0 ? ` · $${mrr.toLocaleString()} MRR` : ''}
+        </div>
+        <div style="font-size:12px;color:var(--dim)">EZER is now running on your real ${labels[name]} data.</div>`;
+
+      state.isDemo = false;
+      toast(`${customerCount} customers synced from ${labels[name]}!`, 'success');
+
+      // Auto-run agent to score real customers
+      setTimeout(async () => {
+        try {
+          await fetch(`${API}/agent/run?use_llm=false&dry_run=false`, { method:'POST', headers: headers(), mode:'cors' });
+          toast('EZER is scoring your customers now.', 'success');
+          showPage('dashboard', document.querySelector('.sidebar-item'));
+        } catch(e) {}
+      }, 1500);
+
+    } else {
+      setMsg(name, d.detail || 'Sync failed. Check your credentials.', 'var(--red)');
+    }
+  } catch(e) {
+    setMsg(name, 'Sync failed. Try again.', 'var(--red)');
+  }
+}
+
+function copyApiKey() {
+  navigator.clipboard.writeText(state.apiKey || DEMO_KEY);
+  toast('API key copied', 'success');
+}
+
+// ── HELPERS ──
+function fmt(n) { return n!=null ? Number(n).toLocaleString() : '—'; }
+function fmtMRR(n) { if(!n)return '$0'; if(n>=1000)return '$'+(n/1000).toFixed(1)+'K'; return '$'+Math.round(n); }
+function actionLabel(pct) {
+  if(pct>=75)return 'Escalate to account manager';
+  if(pct>=55)return 'Send retention email';
+  if(pct>=35)return 'Send health check-in';
+  return 'Monitor';
+}
+function actionTypeLabel(t) {
+  const m={'send_retention_email':'Send retention email','escalate_to_csm':'Escalate to account manager','send_health_checkin':'Send health check-in','send_reengagement_email':'Send re-engagement email','proactive_support_call':'Schedule support call'};
+  return m[t] || (t||'').replace(/_/g,' ');
+}
+function delay(ms) { return new Promise(r=>setTimeout(r,ms)); }
+
+// ── INIT ──
+window.onload = () => {
+  const saved = localStorage.getItem('ezer_user');
+  if (saved) {
+    state.user = JSON.parse(saved);
+    state.apiKey = localStorage.getItem('ezer_apikey') || DEMO_KEY;
+    state.isDemo = !localStorage.getItem('ezer_apikey');
+    state.trustMode = localStorage.getItem('ezer_trust') || 'safe';
+    enterApp();
+  } else {
+    showScreen('screen-signup');
+  }
+};
+</script>
+</body>
+</html>

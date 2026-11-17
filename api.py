@@ -397,6 +397,66 @@ def create_app() -> "FastAPI":
             )
         return company
 
+    # ── Self-serve registration ───────────────────────────────────────────────
+
+    class RegisterRequest(BaseModel):
+        name:         str
+        email:        str
+        company_name: str
+        password:     str  # stored client-side only; not used server-side for auth
+
+    @app.post("/auth/register", tags=["Auth"])
+    def self_serve_register(req: RegisterRequest):
+        """
+        Public self-serve signup.
+        Creates a unique company_id + live API key, provisions 100 synthetic
+        demo customers so the dashboard shows real data immediately.
+        Returns the API key — store it, it is shown only once.
+        """
+        import re as _re
+        if not req.email or not _re.match(r"[^@]+@[^@]+\.[^@]+", req.email):
+            raise HTTPException(status_code=422, detail="Invalid email address.")
+        if not req.company_name.strip():
+            raise HTTPException(status_code=422, detail="Company name is required.")
+        if len(req.password) < 8:
+            raise HTTPException(status_code=422, detail="Password must be at least 8 characters.")
+
+        # Create API key (auto-generates a unique company_id)
+        result = create_api_key(
+            company_name=req.company_name.strip(),
+            email=req.email.strip().lower(),
+            key_type="live",
+            notes=f"Self-serve signup by {req.name}",
+        )
+        company_id = result["company_id"]
+
+        # Provision demo data so dashboard isn't empty
+        try:
+            from utils.tenancy import provision_tenant
+            provision_tenant(
+                company_id=company_id,
+                company_name=req.company_name.strip(),
+                num_customers=100,
+            )
+        except Exception as e:
+            logger.warning("provision_tenant failed for %s: %s", company_id, e)
+
+        # Train models in background (non-blocking best-effort)
+        try:
+            from models.orchestrator import train_all, run_inference_and_store
+            train_all(verbose=False, company_id=company_id)
+            run_inference_and_store(verbose=False, company_id=company_id)
+        except Exception as e:
+            logger.warning("model training failed for %s: %s", company_id, e)
+
+        return {
+            "api_key":      result["api_key"],
+            "key_id":       result["key_id"],
+            "company_id":   company_id,
+            "company_name": result["company_name"],
+            "warning":      "Save this key — it will not be shown again.",
+        }
+
     # ── Key management endpoints ──────────────────────────────────────────────
 
     @app.post("/auth/keys", tags=["Auth"])
