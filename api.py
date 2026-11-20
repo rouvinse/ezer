@@ -594,18 +594,41 @@ def create_app() -> "FastAPI":
 
     @app.post("/agent/run", tags=["Agent"])
     def run_agent(
+        background_tasks: BackgroundTasks,
         use_llm:    bool = Query(False, description="Use Claude API for LLM planning"),
         llm_budget: int  = Query(20,    description="Max LLM calls per cycle"),
         dry_run:    bool = Query(True,  description="Preview actions without queuing"),
         company:    dict = Depends(require_auth),
     ):
-        """Trigger a full agent decision cycle."""
+        """
+        Trigger a full agent decision cycle.
+        dry_run=true  — preview only, returns immediately with counts.
+        dry_run=false — queues actions in background, returns immediately.
+        """
         from agent.runner import run_agent_cycle
-        cid     = company["company_id"]
-        summary = run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget, company_id=cid, verbose=False, dry_run=dry_run)
+        cid = company["company_id"]
+
         if dry_run:
+            # Dry run is fast enough to run synchronously
+            summary = run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget,
+                                      company_id=cid, verbose=False, dry_run=True)
             summary["note"] = "dry_run=true — actions previewed but not queued"
-        return summary
+            return summary
+
+        # Live run — execute in background to avoid request timeout
+        def _run_in_bg():
+            try:
+                run_agent_cycle(use_llm=use_llm, llm_budget=llm_budget,
+                                company_id=cid, verbose=False, dry_run=False)
+            except Exception as _e:
+                logger.error("background agent cycle failed: %s", _e)
+
+        background_tasks.add_task(_run_in_bg)
+        return {
+            "status":  "started",
+            "message": "Agent cycle running in background. Check /approvals/queue in ~10 seconds.",
+            "dry_run": False,
+        }
 
     @app.post("/agent/train", tags=["Agent"])
     def train_models(
