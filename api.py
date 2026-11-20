@@ -73,7 +73,9 @@ from actions.approval import (
 
 from utils.auth import (
     validate_api_key, create_api_key, revoke_api_key,
-    list_api_keys, bootstrap_admin_key, ensure_auth_schema
+    list_api_keys, bootstrap_admin_key, ensure_auth_schema,
+    save_connector_credentials, get_connector_credentials,
+    list_connected_connectors, ensure_connector_cred_schema,
 )
 
 
@@ -134,11 +136,9 @@ class DashboardSummary(BaseModel):
 
 
 class ExecuteRequest(BaseModel):
+    model_config = {"str_max_length": 500}
     limit:   int = 50
     dry_run: bool = False
-
-    class Config:
-        str_max_length = 500
 
 class ValidatedStr(str):
     """String that strips dangerous characters."""
@@ -157,18 +157,14 @@ class ValidatedStr(str):
         return cls(v)
 
 class ApproveRequest(BaseModel):
+    model_config = {"str_max_length": 2000}
     decided_by:    str = "human"
     edited_reason: str | None = None
 
-    class Config:
-        str_max_length = 2000
-
 class RejectRequest(BaseModel):
+    model_config = {"str_max_length": 2000}
     rejection_note: str = ""
     decided_by:     str = "human"
-
-    class Config:
-        str_max_length = 2000
 
 class BulkApproveRequest(BaseModel):
     action_ids: list[str]
@@ -323,7 +319,7 @@ def create_app() -> "FastAPI":
     app.add_middleware(
         CORSMiddleware,
         allow_origins=TRUSTED_ORIGINS,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["X-API-Key", "Content-Type", "Authorization"],
         allow_credentials=False,
     )
@@ -342,9 +338,11 @@ def create_app() -> "FastAPI":
         RATE_LIMITING = False
         limiter = None
 
-    # ── Startup / shutdown events ─────────────────────────────────────────────
-    @app.on_event("startup")
-    async def on_startup():
+    # ── Lifespan (replaces deprecated on_event) ───────────────────────────────
+    from contextlib import asynccontextmanager  # noqa: F401
+
+    @asynccontextmanager
+    async def _lifespan(app_instance):  # type: ignore[override]
         logger.info(
             "ACIA API starting",
             extra={
@@ -354,10 +352,15 @@ def create_app() -> "FastAPI":
                 "rate_limiting": RATE_LIMITING,
             },
         )
-
-    @app.on_event("shutdown")
-    async def on_shutdown():
+        # Ensure connector cred table is ready on startup
+        try:
+            ensure_connector_cred_schema()
+        except Exception as _e:
+            logger.warning("connector_cred schema setup failed: %s", _e)
+        yield
         logger.info("ACIA API shutting down gracefully")
+
+    app.router.lifespan_context = _lifespan
 
     # ── Authentication setup ──────────────────────────────────────────────────
     # Ensure auth tables exist and admin key is bootstrapped
@@ -771,7 +774,7 @@ def create_app() -> "FastAPI":
         if df.empty:
             raise HTTPException(status_code=404, detail="Action not found")
         from actions.approval import approve_action as _approve
-        result = _approve(action_id, req.decided_by, req.edited_reason)
+        result = _approve(action_id, req.decided_by, req.edited_reason, company_id=cid)
         if result.get("success") is False:
             raise HTTPException(status_code=409, detail=result.get("error", "Could not approve action"))
         return result
@@ -792,7 +795,7 @@ def create_app() -> "FastAPI":
         if df.empty:
             raise HTTPException(status_code=404, detail="Action not found")
         from actions.approval import reject_action as _reject
-        result = _reject(action_id, req.rejection_note, req.decided_by)
+        result = _reject(action_id, req.rejection_note, req.decided_by, company_id=cid)
         if result.get("success") is False:
             raise HTTPException(status_code=409, detail=result.get("error", "Could not reject action"))
         return result
@@ -917,7 +920,7 @@ def create_app() -> "FastAPI":
         creds:   StripeCredentials,
         company: dict = Depends(require_auth),
     ):
-        """Connect Stripe — pulls all customers and transactions."""
+        """Connect Stripe — validates key, pulls all customers and transactions, saves credentials for future syncs."""
         stripe_key = creds.stripe_key
         if not stripe_key.startswith(("sk_live_", "sk_test_")):
             raise HTTPException(status_code=400, detail="Invalid Stripe key")
@@ -928,8 +931,9 @@ def create_app() -> "FastAPI":
             account_name = account.get("business_profile", {}).get("name") or account.get("email", "Unknown")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Stripe connection failed: {e}")
+        # Save credentials for future syncs (encrypted at rest if ACIA_CRED_KEY is set)
+        save_connector_credentials(company["company_id"], "stripe", {"stripe_key": stripe_key})
         try:
-            # SEC-NEW-003 fix: pass key directly, never write to os.environ
             from connectors.stripe_connector import sync_stripe
             summary = sync_stripe(
                 company_id=company["company_id"],
@@ -943,6 +947,25 @@ def create_app() -> "FastAPI":
             return summary
         except Exception:
             raise HTTPException(status_code=500, detail="Stripe sync failed")
+
+    @app.post("/connectors/stripe/sync", tags=["Connectors"])
+    def stripe_sync(company: dict = Depends(require_auth)):
+        """Re-sync Stripe data using saved credentials."""
+        saved = get_connector_credentials(company["company_id"], "stripe")
+        if not saved or not saved.get("stripe_key"):
+            raise HTTPException(status_code=400, detail="Stripe not connected. Use POST /connectors/stripe/connect first.")
+        try:
+            from connectors.stripe_connector import sync_stripe
+            summary = sync_stripe(
+                company_id=company["company_id"],
+                stripe_key=saved["stripe_key"],
+                fetch_invoices=True,
+                verbose=False,
+            )
+            summary["connector"] = "stripe"
+            return summary
+        except Exception:
+            raise HTTPException(status_code=500, detail="Stripe re-sync failed")
 
     @app.get("/connectors/stripe/status", tags=["Connectors"])
     def stripe_status(company: dict = Depends(require_auth)):
@@ -978,9 +1001,9 @@ def create_app() -> "FastAPI":
         creds:   HubSpotCredentials,
         company: dict = Depends(require_auth),
     ):
-        """Connect HubSpot — pulls contacts, companies, deals, and engagement."""
+        """Connect HubSpot — pulls contacts, companies, deals, and engagement. Saves credentials."""
+        save_connector_credentials(company["company_id"], "hubspot", {"access_token": creds.access_token})
         try:
-            # SEC-NEW-003 fix: pass token directly, never write to os.environ
             from connectors.hubspot_connector import sync_hubspot
             summary = sync_hubspot(
                 company_id=company["company_id"],
@@ -991,6 +1014,24 @@ def create_app() -> "FastAPI":
             return summary
         except Exception:
             raise HTTPException(status_code=500, detail="HubSpot sync failed")
+
+    @app.post("/connectors/hubspot/sync", tags=["Connectors"])
+    def hubspot_sync(company: dict = Depends(require_auth)):
+        """Re-sync HubSpot data using saved credentials."""
+        saved = get_connector_credentials(company["company_id"], "hubspot")
+        if not saved or not saved.get("access_token"):
+            raise HTTPException(status_code=400, detail="HubSpot not connected. Use POST /connectors/hubspot/connect first.")
+        try:
+            from connectors.hubspot_connector import sync_hubspot
+            summary = sync_hubspot(
+                company_id=company["company_id"],
+                access_token=saved["access_token"],
+                verbose=False,
+            )
+            summary["connector"] = "hubspot"
+            return summary
+        except Exception:
+            raise HTTPException(status_code=500, detail="HubSpot re-sync failed")
 
     @app.get("/connectors/hubspot/status", tags=["Connectors"])
     def hubspot_status(company: dict = Depends(require_auth)):
@@ -1026,9 +1067,9 @@ def create_app() -> "FastAPI":
         creds:   RazorpayCredentials,
         company: dict = Depends(require_auth),
     ):
-        """Connect Razorpay — pulls customers and payment history."""
+        """Connect Razorpay — pulls customers and payment history. Saves credentials."""
+        save_connector_credentials(company["company_id"], "razorpay", {"key_id": creds.key_id, "key_secret": creds.key_secret})
         try:
-            # SEC-NEW-003 fix: pass keys directly, never write to os.environ
             from connectors.razorpay_connector import sync_razorpay
             summary = sync_razorpay(
                 company_id=company["company_id"],
@@ -1040,6 +1081,25 @@ def create_app() -> "FastAPI":
             return summary
         except Exception:
             raise HTTPException(status_code=500, detail="Razorpay sync failed")
+
+    @app.post("/connectors/razorpay/sync", tags=["Connectors"])
+    def razorpay_sync(company: dict = Depends(require_auth)):
+        """Re-sync Razorpay data using saved credentials."""
+        saved = get_connector_credentials(company["company_id"], "razorpay")
+        if not saved or not saved.get("key_id"):
+            raise HTTPException(status_code=400, detail="Razorpay not connected. Use POST /connectors/razorpay/connect first.")
+        try:
+            from connectors.razorpay_connector import sync_razorpay
+            summary = sync_razorpay(
+                company_id=company["company_id"],
+                key_id=saved["key_id"],
+                key_secret=saved["key_secret"],
+                verbose=False,
+            )
+            summary["connector"] = "razorpay"
+            return summary
+        except Exception:
+            raise HTTPException(status_code=500, detail="Razorpay re-sync failed")
 
     @app.get("/connectors/razorpay/status", tags=["Connectors"])
     def razorpay_status(company: dict = Depends(require_auth)):
@@ -1082,9 +1142,9 @@ def create_app() -> "FastAPI":
         creds:   IntercomCredentials,
         company: dict = Depends(require_auth),
     ):
-        """Connect Intercom — pulls conversations, contacts, and support data."""
+        """Connect Intercom — pulls conversations, contacts, and support data. Saves credentials."""
+        save_connector_credentials(company["company_id"], "intercom", {"access_token": creds.access_token})
         try:
-            # SEC-NEW-003 fix: pass token directly, never write to os.environ
             from connectors.intercom_connector import sync_intercom
             summary = sync_intercom(
                 company_id=company["company_id"],
@@ -1095,6 +1155,24 @@ def create_app() -> "FastAPI":
             return summary
         except Exception:
             raise HTTPException(status_code=500, detail="Intercom sync failed")
+
+    @app.post("/connectors/intercom/sync", tags=["Connectors"])
+    def intercom_sync(company: dict = Depends(require_auth)):
+        """Re-sync Intercom data using saved credentials."""
+        saved = get_connector_credentials(company["company_id"], "intercom")
+        if not saved or not saved.get("access_token"):
+            raise HTTPException(status_code=400, detail="Intercom not connected. Use POST /connectors/intercom/connect first.")
+        try:
+            from connectors.intercom_connector import sync_intercom
+            summary = sync_intercom(
+                company_id=company["company_id"],
+                access_token=saved["access_token"],
+                verbose=False,
+            )
+            summary["connector"] = "intercom"
+            return summary
+        except Exception:
+            raise HTTPException(status_code=500, detail="Intercom re-sync failed")
 
     @app.get("/connectors/intercom/status", tags=["Connectors"])
     def intercom_status(company: dict = Depends(require_auth)):
@@ -1109,7 +1187,6 @@ def create_app() -> "FastAPI":
     ):
         """Test Salesforce credentials."""
         try:
-            # SEC-NEW-003 fix: pass creds directly, never write to os.environ
             from connectors.salesforce_connector import test_connection
             ok = test_connection(
                 username=creds.username,
@@ -1132,9 +1209,16 @@ def create_app() -> "FastAPI":
         creds:   SalesforceCredentials,
         company: dict = Depends(require_auth),
     ):
-        """Connect Salesforce — pulls accounts, contacts, opportunities."""
+        """Connect Salesforce — pulls accounts, contacts, opportunities. Saves credentials."""
+        save_connector_credentials(company["company_id"], "salesforce", {
+            "username": creds.username,
+            "password": creds.password,
+            "security_token": creds.security_token,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "domain": creds.domain,
+        })
         try:
-            # SEC-NEW-003 fix: pass creds directly, never write to os.environ
             from connectors.salesforce_connector import sync_salesforce
             summary = sync_salesforce(
                 company_id=company["company_id"],
@@ -1151,6 +1235,24 @@ def create_app() -> "FastAPI":
         except Exception:
             raise HTTPException(status_code=500, detail="Salesforce sync failed")
 
+    @app.post("/connectors/salesforce/sync", tags=["Connectors"])
+    def salesforce_sync(company: dict = Depends(require_auth)):
+        """Re-sync Salesforce data using saved credentials."""
+        saved = get_connector_credentials(company["company_id"], "salesforce")
+        if not saved or not saved.get("username"):
+            raise HTTPException(status_code=400, detail="Salesforce not connected. Use POST /connectors/salesforce/connect first.")
+        try:
+            from connectors.salesforce_connector import sync_salesforce
+            summary = sync_salesforce(
+                company_id=company["company_id"],
+                verbose=False,
+                **{k: saved[k] for k in ["username","password","security_token","client_id","client_secret","domain"] if k in saved},
+            )
+            summary["connector"] = "salesforce"
+            return summary
+        except Exception:
+            raise HTTPException(status_code=500, detail="Salesforce re-sync failed")
+
     @app.get("/connectors/salesforce/status", tags=["Connectors"])
     def salesforce_status(company: dict = Depends(require_auth)):
         """Current Salesforce data in EZER database."""
@@ -1159,17 +1261,22 @@ def create_app() -> "FastAPI":
     # ── CONNECTOR OVERVIEW ───────────────────────────────────────────────────
     @app.get("/connectors", tags=["Connectors"])
     def list_connectors(company: dict = Depends(require_auth)):
-        """List all available connectors and their status."""
+        """List all available connectors, which are connected, and data summary."""
         cid = company["company_id"]
         status = _connector_status(cid)
+        connected = list_connected_connectors(cid)
+        all_connectors = [
+            {"name": "stripe",     "label": "Stripe",     "fields": ["stripe_key"]},
+            {"name": "hubspot",    "label": "HubSpot",    "fields": ["access_token"]},
+            {"name": "razorpay",   "label": "Razorpay",   "fields": ["key_id","key_secret"]},
+            {"name": "intercom",   "label": "Intercom",   "fields": ["access_token"]},
+            {"name": "salesforce", "label": "Salesforce", "fields": ["username","password","security_token","client_id","client_secret"]},
+        ]
+        for c in all_connectors:
+            c["status"] = "connected" if c["name"] in connected else "available"
         return {
-            "connectors": [
-                {"name": "stripe",     "label": "Stripe",     "status": "available", "fields": ["stripe_key"]},
-                {"name": "hubspot",    "label": "HubSpot",    "status": "available", "fields": ["access_token"]},
-                {"name": "razorpay",   "label": "Razorpay",   "status": "available", "fields": ["key_id","key_secret"]},
-                {"name": "intercom",   "label": "Intercom",   "status": "available", "fields": ["access_token"]},
-                {"name": "salesforce", "label": "Salesforce", "status": "available", "fields": ["username","password","security_token","client_id","client_secret"]},
-            ],
+            "connectors": all_connectors,
+            "connected_count": len(connected),
             "data_summary": status,
         }
 
@@ -1228,6 +1335,207 @@ def create_app() -> "FastAPI":
     # NOTE: /admin/reset-key and /admin/debug-key have been permanently removed.
     # These were unauthenticated backdoor routes (SEC-NEW-001). Any emergency
     # key rotation must be done directly via the Railway PostgreSQL console.
+
+    # ── EZER Billing (Stripe — EZER's own subscriptions) ─────────────────────
+    # EZER_STRIPE_SECRET_KEY must be set in Railway env vars.
+    # This is EZER's own Stripe account key (not customers' Stripe accounts).
+    # Plans:
+    #   Starter  — $49/mo  — price_id from EZER_STRIPE_PRICE_STARTER
+    #   Growth   — $149/mo — price_id from EZER_STRIPE_PRICE_GROWTH
+    #   Scale    — $399/mo — price_id from EZER_STRIPE_PRICE_SCALE
+
+    class BillingCheckoutRequest(BaseModel):
+        plan:         str               # starter | growth | scale
+        success_url:  str = "https://ezerapp.netlify.app?billing=success"
+        cancel_url:   str = "https://ezerapp.netlify.app?billing=cancelled"
+
+    @app.post("/billing/checkout", tags=["Billing"])
+    def create_checkout_session(
+        req:     BillingCheckoutRequest,
+        company: dict = Depends(require_auth),
+    ):
+        """
+        Create a Stripe Checkout session for EZER subscription.
+        Returns a URL the user visits to pay. No card data touches EZER servers.
+        """
+        EZER_STRIPE_KEY = os.environ.get("EZER_STRIPE_SECRET_KEY", "")
+        if not EZER_STRIPE_KEY:
+            raise HTTPException(status_code=503, detail="Billing not configured. Contact support.")
+
+        price_map = {
+            "starter": os.environ.get("EZER_STRIPE_PRICE_STARTER", ""),
+            "growth":  os.environ.get("EZER_STRIPE_PRICE_GROWTH",  ""),
+            "scale":   os.environ.get("EZER_STRIPE_PRICE_SCALE",   ""),
+        }
+        price_id = price_map.get(req.plan.lower(), "")
+        if not price_id:
+            raise HTTPException(status_code=400, detail=f"Unknown plan '{req.plan}'. Choose: starter, growth, scale.")
+
+        try:
+            import stripe as stripe_lib
+            stripe_lib.api_key = EZER_STRIPE_KEY
+
+            session = stripe_lib.checkout.Session.create(
+                mode="subscription",
+                payment_method_types=["card"],
+                line_items=[{"price": price_id, "quantity": 1}],
+                success_url=req.success_url + "&session_id={CHECKOUT_SESSION_ID}",
+                cancel_url=req.cancel_url,
+                client_reference_id=company["company_id"],
+                customer_email=company.get("email") or None,
+                metadata={
+                    "company_id":   company["company_id"],
+                    "company_name": company["company_name"],
+                    "plan":         req.plan,
+                },
+                subscription_data={
+                    "metadata": {
+                        "company_id": company["company_id"],
+                        "plan":       req.plan,
+                    }
+                },
+            )
+            return {
+                "checkout_url": session.url,
+                "session_id":   session.id,
+                "plan":         req.plan,
+                "expires_at":   session.expires_at,
+            }
+        except Exception as e:
+            logger.error("billing checkout error: %s", e)
+            raise HTTPException(status_code=500, detail="Could not create checkout session.")
+
+    @app.get("/billing/status", tags=["Billing"])
+    def billing_status(company: dict = Depends(require_auth)):
+        """
+        Return the current billing plan and subscription status for this company.
+        """
+        EZER_STRIPE_KEY = os.environ.get("EZER_STRIPE_SECRET_KEY", "")
+        if not EZER_STRIPE_KEY:
+            return {"billing_enabled": False, "plan": company.get("plan", "starter")}
+
+        try:
+            import stripe as stripe_lib
+            stripe_lib.api_key = EZER_STRIPE_KEY
+            # Find customer by company_id in metadata
+            subs = stripe_lib.Subscription.search(
+                query=f"metadata['company_id']:'{company['company_id']}'",
+                limit=1,
+            )
+            if subs.data:
+                sub = subs.data[0]
+                return {
+                    "billing_enabled":   True,
+                    "subscription_id":   sub.id,
+                    "status":            sub.status,
+                    "plan":              sub.metadata.get("plan", "unknown"),
+                    "current_period_end": sub.current_period_end,
+                    "cancel_at_period_end": sub.cancel_at_period_end,
+                }
+        except Exception as e:
+            logger.warning("billing_status lookup failed: %s", e)
+        return {"billing_enabled": True, "plan": company.get("plan", "starter"), "status": "unknown"}
+
+    @app.post("/billing/portal", tags=["Billing"])
+    def billing_portal(company: dict = Depends(require_auth)):
+        """
+        Return a Stripe Customer Portal URL so users can manage/cancel subscriptions.
+        """
+        EZER_STRIPE_KEY = os.environ.get("EZER_STRIPE_SECRET_KEY", "")
+        if not EZER_STRIPE_KEY:
+            raise HTTPException(status_code=503, detail="Billing not configured.")
+        try:
+            import stripe as stripe_lib
+            stripe_lib.api_key = EZER_STRIPE_KEY
+            # Find or create a Stripe customer for this company
+            customers = stripe_lib.Customer.search(
+                query=f"metadata['company_id']:'{company['company_id']}'",
+                limit=1,
+            )
+            if customers.data:
+                stripe_customer_id = customers.data[0].id
+            else:
+                # Create Stripe customer record
+                sc = stripe_lib.Customer.create(
+                    email=company.get("email") or None,
+                    name=company.get("company_name", ""),
+                    metadata={"company_id": company["company_id"]},
+                )
+                stripe_customer_id = sc.id
+
+            session = stripe_lib.billing_portal.Session.create(
+                customer=stripe_customer_id,
+                return_url="https://ezerapp.netlify.app",
+            )
+            return {"portal_url": session.url}
+        except Exception as e:
+            logger.error("billing portal error: %s", e)
+            raise HTTPException(status_code=500, detail="Could not create billing portal session.")
+
+    @app.post("/billing/webhook", tags=["Billing"])
+    async def stripe_webhook(request: Request):
+        """
+        Stripe webhook endpoint — handles subscription lifecycle events.
+        Set webhook URL in Stripe dashboard: https://ezer-production.up.railway.app/billing/webhook
+        Set EZER_STRIPE_WEBHOOK_SECRET in Railway env vars.
+        """
+        EZER_STRIPE_KEY    = os.environ.get("EZER_STRIPE_SECRET_KEY", "")
+        WEBHOOK_SECRET     = os.environ.get("EZER_STRIPE_WEBHOOK_SECRET", "")
+        if not EZER_STRIPE_KEY:
+            raise HTTPException(status_code=503, detail="Billing not configured.")
+
+        payload  = await request.body()
+        sig      = request.headers.get("stripe-signature", "")
+
+        try:
+            import stripe as stripe_lib
+            stripe_lib.api_key = EZER_STRIPE_KEY
+            if WEBHOOK_SECRET:
+                event = stripe_lib.Webhook.construct_event(payload, sig, WEBHOOK_SECRET)
+            else:
+                event = stripe_lib.Event.construct_from(
+                    __import__("json").loads(payload), stripe_lib.api_key
+                )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Webhook error: {e}")
+
+        # Handle subscription events
+        etype = event["type"]
+        data  = event["data"]["object"]
+
+        if etype in ("customer.subscription.created", "customer.subscription.updated"):
+            company_id = data.get("metadata", {}).get("company_id")
+            plan       = data.get("metadata", {}).get("plan", "starter")
+            if company_id:
+                try:
+                    conn = get_connection()
+                    conn.execute(
+                        "UPDATE companies SET plan=? WHERE company_id=?",
+                        (plan, company_id)
+                    )
+                    conn.commit()
+                    conn.close()
+                    logger.info("billing plan updated: company=%s plan=%s status=%s",
+                                company_id, plan, data.get("status"))
+                except Exception as e:
+                    logger.error("failed to update plan for %s: %s", company_id, e)
+
+        elif etype == "customer.subscription.deleted":
+            company_id = data.get("metadata", {}).get("company_id")
+            if company_id:
+                try:
+                    conn = get_connection()
+                    conn.execute(
+                        "UPDATE companies SET plan='cancelled' WHERE company_id=?",
+                        (company_id,)
+                    )
+                    conn.commit()
+                    conn.close()
+                    logger.info("subscription cancelled: company=%s", company_id)
+                except Exception as e:
+                    logger.error("failed to cancel plan for %s: %s", company_id, e)
+
+        return {"received": True, "type": etype}
 
     return app
 

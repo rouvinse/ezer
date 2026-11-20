@@ -61,7 +61,7 @@ class TestNoBackdoorRoutes:
 
         PUBLIC_PATHS = {"/", "/health", "/docs", "/openapi.json", "/redoc",
                         "/auth/keys", "/auth/keys/{key_id}", "/agent/train",
-                        "/auth/register"}
+                        "/auth/register", "/billing/webhook"}
 
         lines = self.src.split("\n")
         unprotected = []

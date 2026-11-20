@@ -76,9 +76,13 @@ def startup():
         for tbl in ("customers", "transactions", "engagement_events",
                     "support_tickets", "ml_predictions", "agent_actions", "email_log"):
             try:
+                # Re-tag ALL legacy non-UUID company_ids (default, tester-001, etc.)
                 cur = conn3.execute(
-                    f"UPDATE {tbl} SET company_id=? WHERE company_id='default'",  # nosec B608
-                    (DEMO_COMPANY_ID,)
+                    f"UPDATE {tbl} SET company_id=? "  # nosec B608
+                    f"WHERE company_id NOT LIKE 'acia_%' "
+                    f"AND company_id != ? "
+                    f"AND company_id NOT LIKE '________-____-____-____-____________'",
+                    (DEMO_COMPANY_ID, DEMO_COMPANY_ID)
                 )
                 retagged += cur.rowcount
             except Exception:

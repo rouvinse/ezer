@@ -278,3 +278,122 @@ def ensure_admin_key_in_db():
     bootstrap_admin_key()
 
 
+# ── Connector credential storage ───────────────────────────────────────────────
+# Credentials are encrypted at rest using AES-256 (Fernet) when the env var
+# ACIA_CRED_KEY is set. If not set, they are stored as plain text — acceptable
+# for a single-server setup but set the env var in production.
+
+CONNECTOR_CRED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS connector_credentials (
+    cred_id      TEXT PRIMARY KEY,
+    company_id   TEXT NOT NULL,
+    connector    TEXT NOT NULL,
+    cred_json    TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    UNIQUE(company_id, connector)
+);
+"""
+
+
+def _get_fernet():
+    """Return a Fernet cipher if ACIA_CRED_KEY is set, else None."""
+    key = os.environ.get("ACIA_CRED_KEY", "")
+    if not key:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        # Pad/trim key to exactly 32 bytes, then base64-encode for Fernet
+        import base64
+        raw = key.encode()[:32].ljust(32, b"\x00")
+        fernet_key = base64.urlsafe_b64encode(raw)
+        return Fernet(fernet_key)
+    except Exception:
+        return None
+
+
+def _encrypt_cred(plaintext: str) -> str:
+    f = _get_fernet()
+    if f:
+        return f.encrypt(plaintext.encode()).decode()
+    return plaintext
+
+
+def _decrypt_cred(ciphertext: str) -> str:
+    f = _get_fernet()
+    if f:
+        try:
+            return f.decrypt(ciphertext.encode()).decode()
+        except Exception:
+            return ciphertext  # fallback: return as-is if decryption fails
+    return ciphertext
+
+
+def ensure_connector_cred_schema():
+    conn = get_connection()
+    conn.executescript(CONNECTOR_CRED_SCHEMA)
+    conn.commit()
+    conn.close()
+
+
+def save_connector_credentials(company_id: str, connector: str, creds: dict) -> None:
+    """
+    Persist connector credentials for a company.
+    creds: dict of credential fields (e.g. {"stripe_key": "sk_live_..."})
+    """
+    import json as _json
+    ensure_connector_cred_schema()
+    cred_json = _encrypt_cred(_json.dumps(creds))
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    # Upsert
+    existing = conn.execute(
+        "SELECT cred_id FROM connector_credentials WHERE company_id=? AND connector=?",
+        (company_id, connector)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE connector_credentials SET cred_json=?, updated_at=? WHERE company_id=? AND connector=?",
+            (cred_json, now, company_id, connector)
+        )
+    else:
+        conn.execute(
+            "INSERT INTO connector_credentials (cred_id, company_id, connector, cred_json, updated_at) "
+            "VALUES (?,?,?,?,?)",
+            (str(uuid.uuid4()), company_id, connector, cred_json, now)
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_connector_credentials(company_id: str, connector: str) -> dict | None:
+    """
+    Load saved connector credentials for a company.
+    Returns the creds dict, or None if not found.
+    """
+    import json as _json
+    ensure_connector_cred_schema()
+    try:
+        df = read_sql(
+            "SELECT cred_json FROM connector_credentials WHERE company_id=? AND connector=?",
+            params=(company_id, connector)
+        )
+        if df.empty:
+            return None
+        return _json.loads(_decrypt_cred(str(df.iloc[0]["cred_json"])))
+    except Exception:
+        return None
+
+
+def list_connected_connectors(company_id: str) -> list[str]:
+    """Return list of connector names that have saved credentials."""
+    ensure_connector_cred_schema()
+    try:
+        df = read_sql(
+            "SELECT connector FROM connector_credentials WHERE company_id=? ORDER BY updated_at DESC",
+            params=(company_id,)
+        )
+        return df["connector"].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+

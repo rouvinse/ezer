@@ -766,6 +766,10 @@ body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--ink); m
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
       Connections
     </div>
+    <div class="sidebar-item" onclick="showPage('billing',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+      Billing
+    </div>
     <div class="sidebar-item" onclick="showPage('settings',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       Settings
@@ -982,6 +986,64 @@ body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--ink); m
       <div style="margin-top:16px;font-size:13px;color:var(--dim);padding:16px;background:var(--card);border:1px solid var(--border);border-radius:12px">
         <strong style="color:var(--ink)">Coming soon:</strong> Freshdesk, Mixpanel, Amplitude, Chargebee, Pipedrive, Zendesk, Segment, Klaviyo.
         Using something else? <a href="mailto:founder@ezercrmai.com" style="color:var(--accent)">Let us know.</a>
+      </div>
+    </div>
+
+
+    <!-- BILLING PAGE -->
+    <div class="page" id="page-billing">
+      <div class="page-header">
+        <div class="page-title">Billing</div>
+        <div class="page-sub">Manage your EZER subscription.</div>
+      </div>
+
+      <div id="billing-status-banner" style="margin-bottom:24px"></div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:32px">
+        <!-- Starter -->
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px" id="plan-starter">
+          <div style="font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">Starter</div>
+          <div style="font-size:32px;font-weight:700;color:var(--ink);margin-bottom:4px">$49<span style="font-size:14px;font-weight:400;color:var(--dim)">/mo</span></div>
+          <ul style="font-size:13px;color:var(--dim);margin:12px 0 20px;padding-left:16px;line-height:1.9">
+            <li>Up to 1,000 customers</li>
+            <li>All 5 connectors</li>
+            <li>Churn &amp; conversion AI</li>
+            <li>Approval queue</li>
+            <li>Email support</li>
+          </ul>
+          <button class="btn btn-secondary" style="width:100%" onclick="startCheckout('starter')">Get started</button>
+        </div>
+        <!-- Growth -->
+        <div style="background:var(--card);border:2px solid var(--accent);border-radius:16px;padding:24px;position:relative" id="plan-growth">
+          <div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--accent);color:white;font-size:10px;font-weight:700;padding:3px 10px;border-radius:100px;letter-spacing:.06em">MOST POPULAR</div>
+          <div style="font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">Growth</div>
+          <div style="font-size:32px;font-weight:700;color:var(--ink);margin-bottom:4px">$149<span style="font-size:14px;font-weight:400;color:var(--dim)">/mo</span></div>
+          <ul style="font-size:13px;color:var(--dim);margin:12px 0 20px;padding-left:16px;line-height:1.9">
+            <li>Up to 10,000 customers</li>
+            <li>All 5 connectors</li>
+            <li>Full ML predictions</li>
+            <li>Autonomous mode</li>
+            <li>Priority support</li>
+          </ul>
+          <button class="btn btn-primary" style="width:100%" onclick="startCheckout('growth')">Get started</button>
+        </div>
+        <!-- Scale -->
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px" id="plan-scale">
+          <div style="font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">Scale</div>
+          <div style="font-size:32px;font-weight:700;color:var(--ink);margin-bottom:4px">$399<span style="font-size:14px;font-weight:400;color:var(--dim)">/mo</span></div>
+          <ul style="font-size:13px;color:var(--dim);margin:12px 0 20px;padding-left:16px;line-height:1.9">
+            <li>Unlimited customers</li>
+            <li>All connectors</li>
+            <li>Custom ML models</li>
+            <li>White-glove onboarding</li>
+            <li>Dedicated support</li>
+          </ul>
+          <button class="btn btn-secondary" style="width:100%" onclick="startCheckout('scale')">Get started</button>
+        </div>
+      </div>
+
+      <div style="text-align:center">
+        <button class="btn btn-ghost btn-sm" onclick="openBillingPortal()">Manage subscription &amp; invoices →</button>
       </div>
     </div>
 
@@ -1319,6 +1381,64 @@ async function loadPage(id) {
   else if (id === 'churn') loadChurn();
   else if (id === 'upgrades') loadUpgrades();
   else if (id === 'approvals') loadApprovals();
+  else if (id === 'billing') loadBilling();
+}
+
+// ── BILLING ──
+async function loadBilling() {
+  const banner = document.getElementById('billing-status-banner');
+  try {
+    const r = await fetch(`${API}/billing/status`, { headers: headers() });
+    const d = await r.json();
+    if (d.billing_enabled && d.status === 'active') {
+      const planLabel = {starter:'Starter',growth:'Growth',scale:'Scale'}[d.plan] || d.plan;
+      const renewal = d.current_period_end ? new Date(d.current_period_end*1000).toLocaleDateString() : '—';
+      banner.innerHTML = `<div style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.3);border-radius:12px;padding:16px 20px;font-size:13px;color:var(--ink)">
+        <strong style="color:#10b981">✓ Active subscription</strong> — <strong>${planLabel}</strong> plan.
+        Renews ${renewal}. <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="openBillingPortal()">Manage</button>
+      </div>`;
+      // Highlight active plan card
+      document.querySelectorAll('[id^="plan-"]').forEach(el => el.style.opacity = '0.5');
+      const activeCard = document.getElementById('plan-' + d.plan);
+      if (activeCard) activeCard.style.opacity = '1';
+    } else {
+      banner.innerHTML = `<div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.2);border-radius:12px;padding:16px 20px;font-size:13px;color:var(--ink)">
+        <strong>No active subscription.</strong> Choose a plan below to unlock full access.
+      </div>`;
+    }
+  } catch(e) {
+    banner.innerHTML = '';
+  }
+}
+
+async function startCheckout(plan) {
+  try {
+    const r = await fetch(`${API}/billing/checkout`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ plan })
+    });
+    if (!r.ok) {
+      const err = await r.json();
+      toast(err.detail || 'Billing error', 'error');
+      return;
+    }
+    const d = await r.json();
+    window.open(d.checkout_url, '_blank');
+  } catch(e) {
+    toast('Could not start checkout. Try again.', 'error');
+  }
+}
+
+async function openBillingPortal() {
+  try {
+    const r = await fetch(`${API}/billing/portal`, { method:'POST', headers: headers() });
+    if (!r.ok) { toast('Could not open portal.','error'); return; }
+    const d = await r.json();
+    window.open(d.portal_url, '_blank');
+  } catch(e) {
+    toast('Could not open portal. Try again.', 'error');
+  }
 }
 
 async function loadDashboard() {
