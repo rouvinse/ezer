@@ -137,6 +137,14 @@ def schedule(
     ensure_approval_schema()
 
     # Write to DB (clear old pending first — scoped to tenant)
+    # Must delete from approval_log first to satisfy the FK constraint on PostgreSQL
+    conn.execute(
+        "DELETE FROM approval_log WHERE action_id IN ("
+        "  SELECT action_id FROM agent_actions "
+        "  WHERE status IN ('pending','pending_approval') AND company_id=?"
+        ")",
+        (cid_scope,)
+    )
     conn.execute(
         "DELETE FROM agent_actions "
         "WHERE status IN ('pending','pending_approval') AND company_id=?",
