@@ -837,8 +837,24 @@ def create_app() -> "FastAPI":
             """, params=(cid, limit))
             history = df.to_dict("records") if not df.empty else []
             return {"history": history, "count": len(history)}
-        except Exception:
-            raise HTTPException(status_code=500, detail="History query failed")
+        except Exception as _he:
+            logger.warning("approval history query failed: %s", _he)
+            # Fallback: query without the join in case approval_log doesn't exist yet
+            try:
+                df2 = read_sql("""
+                    SELECT action_id, customer_id, action_type, priority,
+                           reason, status, outcome, created_at, executed_at,
+                           decided_by
+                    FROM agent_actions
+                    WHERE company_id = ? AND status IN ('approved','rejected','executed')
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, params=(cid, limit))
+                history = df2.to_dict("records") if not df2.empty else []
+                return {"history": history, "count": len(history)}
+            except Exception as _he2:
+                logger.error("approval history fallback also failed: %s", _he2)
+                raise HTTPException(status_code=500, detail="History query failed")
 
     # ── Trust mode ────────────────────────────────────────────────────────────
 
