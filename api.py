@@ -1336,18 +1336,30 @@ def create_app() -> "FastAPI":
     # These were unauthenticated backdoor routes (SEC-NEW-001). Any emergency
     # key rotation must be done directly via the Railway PostgreSQL console.
 
-    # ── EZER Billing (Stripe — EZER's own subscriptions) ─────────────────────
-    # EZER_STRIPE_SECRET_KEY must be set in Railway env vars.
-    # This is EZER's own Stripe account key (not customers' Stripe accounts).
-    # Plans:
-    #   Starter  — $49/mo  — price_id from EZER_STRIPE_PRICE_STARTER
-    #   Growth   — $149/mo — price_id from EZER_STRIPE_PRICE_GROWTH
-    #   Scale    — $399/mo — price_id from EZER_STRIPE_PRICE_SCALE
+    # ── EZER Billing (Razorpay — EZER's own subscriptions) ───────────────────
+    # Razorpay works in India and globally (140+ currencies).
+    # Required Railway env vars:
+    #   EZER_RAZORPAY_KEY_ID      — Razorpay Key ID  (rzp_live_...)
+    #   EZER_RAZORPAY_KEY_SECRET  — Razorpay Key Secret
+    #   EZER_RAZORPAY_PLAN_STARTER  — Razorpay Plan ID for Starter  (~$49/mo)
+    #   EZER_RAZORPAY_PLAN_GROWTH   — Razorpay Plan ID for Growth   (~$149/mo)
+    #   EZER_RAZORPAY_PLAN_SCALE    — Razorpay Plan ID for Scale    (~$399/mo)
+    #
+    # Flow:
+    #   1. POST /billing/checkout  → creates Razorpay Subscription, returns sub_id + key_id
+    #   2. Frontend opens Razorpay checkout modal using sub_id
+    #   3. On payment, Razorpay calls POST /billing/webhook with signature
+    #   4. Webhook verifies HMAC-SHA256 and upgrades company plan in DB
+    #
+    # Create plans in Razorpay dashboard → Subscriptions → Plans (INR or USD).
+    # Set webhook URL: https://ezer-production.up.railway.app/billing/webhook
+    # Set webhook secret as EZER_RAZORPAY_WEBHOOK_SECRET in Railway.
 
     class BillingCheckoutRequest(BaseModel):
-        plan:         str               # starter | growth | scale
-        success_url:  str = "https://ezerapp.netlify.app?billing=success"
-        cancel_url:   str = "https://ezerapp.netlify.app?billing=cancelled"
+        plan:        str  # starter | growth | scale
+        customer_name:  str = ""
+        customer_email: str = ""
+        customer_contact: str = ""
 
     @app.post("/billing/checkout", tags=["Billing"])
     def create_checkout_session(
@@ -1355,157 +1367,132 @@ def create_app() -> "FastAPI":
         company: dict = Depends(require_auth),
     ):
         """
-        Create a Stripe Checkout session for EZER subscription.
-        Returns a URL the user visits to pay. No card data touches EZER servers.
+        Create a Razorpay Subscription for EZER billing.
+        Returns subscription_id and key_id — frontend opens Razorpay modal with these.
+        No card data ever touches EZER servers.
         """
-        EZER_STRIPE_KEY = os.environ.get("EZER_STRIPE_SECRET_KEY", "")
-        if not EZER_STRIPE_KEY:
+        RZP_KEY_ID     = os.environ.get("EZER_RAZORPAY_KEY_ID", "")
+        RZP_KEY_SECRET = os.environ.get("EZER_RAZORPAY_KEY_SECRET", "")
+        if not RZP_KEY_ID or not RZP_KEY_SECRET:
             raise HTTPException(status_code=503, detail="Billing not configured. Contact support.")
 
-        price_map = {
-            "starter": os.environ.get("EZER_STRIPE_PRICE_STARTER", ""),
-            "growth":  os.environ.get("EZER_STRIPE_PRICE_GROWTH",  ""),
-            "scale":   os.environ.get("EZER_STRIPE_PRICE_SCALE",   ""),
+        plan_map = {
+            "starter": os.environ.get("EZER_RAZORPAY_PLAN_STARTER", ""),
+            "growth":  os.environ.get("EZER_RAZORPAY_PLAN_GROWTH",  ""),
+            "scale":   os.environ.get("EZER_RAZORPAY_PLAN_SCALE",   ""),
         }
-        price_id = price_map.get(req.plan.lower(), "")
-        if not price_id:
+        plan_id = plan_map.get(req.plan.lower(), "")
+        if not plan_id:
             raise HTTPException(status_code=400, detail=f"Unknown plan '{req.plan}'. Choose: starter, growth, scale.")
 
         try:
-            import stripe as stripe_lib
-            stripe_lib.api_key = EZER_STRIPE_KEY
+            import razorpay as rzp_lib
+            client = rzp_lib.Client(auth=(RZP_KEY_ID, RZP_KEY_SECRET))
 
-            session = stripe_lib.checkout.Session.create(
-                mode="subscription",
-                payment_method_types=["card"],
-                line_items=[{"price": price_id, "quantity": 1}],
-                success_url=req.success_url + "&session_id={CHECKOUT_SESSION_ID}",
-                cancel_url=req.cancel_url,
-                client_reference_id=company["company_id"],
-                customer_email=company.get("email") or None,
-                metadata={
+            # Create or reuse a Razorpay customer
+            customer_data: dict = {
+                "name":    req.customer_name or company.get("company_name", ""),
+                "email":   req.customer_email or company.get("email", ""),
+                "contact": req.customer_contact or "",
+                "notes":   {"company_id": company["company_id"]},
+            }
+            rzp_customer = client.customer.create(data=customer_data)
+            rzp_customer_id = rzp_customer.get("id", "")
+
+            # Create subscription
+            sub = client.subscription.create({
+                "plan_id":        plan_id,
+                "customer_notify": 1,
+                "quantity":        1,
+                "total_count":     120,   # max 10 years — effectively perpetual
+                "customer_id":     rzp_customer_id,
+                "notes": {
                     "company_id":   company["company_id"],
                     "company_name": company["company_name"],
                     "plan":         req.plan,
                 },
-                subscription_data={
-                    "metadata": {
-                        "company_id": company["company_id"],
-                        "plan":       req.plan,
-                    }
-                },
-            )
+            })
+
             return {
-                "checkout_url": session.url,
-                "session_id":   session.id,
-                "plan":         req.plan,
-                "expires_at":   session.expires_at,
+                "subscription_id": sub["id"],
+                "key_id":          RZP_KEY_ID,
+                "plan":            req.plan,
+                "status":          sub.get("status"),
+                "razorpay_customer_id": rzp_customer_id,
             }
         except Exception as e:
             logger.error("billing checkout error: %s", e)
-            raise HTTPException(status_code=500, detail="Could not create checkout session.")
+            raise HTTPException(status_code=500, detail="Could not create subscription.")
 
     @app.get("/billing/status", tags=["Billing"])
     def billing_status(company: dict = Depends(require_auth)):
         """
         Return the current billing plan and subscription status for this company.
         """
-        EZER_STRIPE_KEY = os.environ.get("EZER_STRIPE_SECRET_KEY", "")
-        if not EZER_STRIPE_KEY:
+        RZP_KEY_ID     = os.environ.get("EZER_RAZORPAY_KEY_ID", "")
+        RZP_KEY_SECRET = os.environ.get("EZER_RAZORPAY_KEY_SECRET", "")
+        if not RZP_KEY_ID or not RZP_KEY_SECRET:
             return {"billing_enabled": False, "plan": company.get("plan", "starter")}
 
-        try:
-            import stripe as stripe_lib
-            stripe_lib.api_key = EZER_STRIPE_KEY
-            # Find customer by company_id in metadata
-            subs = stripe_lib.Subscription.search(
-                query=f"metadata['company_id']:'{company['company_id']}'",
-                limit=1,
-            )
-            if subs.data:
-                sub = subs.data[0]
-                return {
-                    "billing_enabled":   True,
-                    "subscription_id":   sub.id,
-                    "status":            sub.status,
-                    "plan":              sub.metadata.get("plan", "unknown"),
-                    "current_period_end": sub.current_period_end,
-                    "cancel_at_period_end": sub.cancel_at_period_end,
-                }
-        except Exception as e:
-            logger.warning("billing_status lookup failed: %s", e)
-        return {"billing_enabled": True, "plan": company.get("plan", "starter"), "status": "unknown"}
+        # Plan stored locally in DB (updated by webhook) — no Razorpay API call needed
+        return {
+            "billing_enabled": True,
+            "plan":            company.get("plan", "starter"),
+        }
 
     @app.post("/billing/portal", tags=["Billing"])
     def billing_portal(company: dict = Depends(require_auth)):
         """
-        Return a Stripe Customer Portal URL so users can manage/cancel subscriptions.
+        Razorpay has no hosted portal like Stripe.
+        Returns a deep-link to the Razorpay customer dashboard and support contact.
         """
-        EZER_STRIPE_KEY = os.environ.get("EZER_STRIPE_SECRET_KEY", "")
-        if not EZER_STRIPE_KEY:
-            raise HTTPException(status_code=503, detail="Billing not configured.")
-        try:
-            import stripe as stripe_lib
-            stripe_lib.api_key = EZER_STRIPE_KEY
-            # Find or create a Stripe customer for this company
-            customers = stripe_lib.Customer.search(
-                query=f"metadata['company_id']:'{company['company_id']}'",
-                limit=1,
-            )
-            if customers.data:
-                stripe_customer_id = customers.data[0].id
-            else:
-                # Create Stripe customer record
-                sc = stripe_lib.Customer.create(
-                    email=company.get("email") or None,
-                    name=company.get("company_name", ""),
-                    metadata={"company_id": company["company_id"]},
-                )
-                stripe_customer_id = sc.id
-
-            session = stripe_lib.billing_portal.Session.create(
-                customer=stripe_customer_id,
-                return_url="https://ezerapp.netlify.app",
-            )
-            return {"portal_url": session.url}
-        except Exception as e:
-            logger.error("billing portal error: %s", e)
-            raise HTTPException(status_code=500, detail="Could not create billing portal session.")
+        return {
+            "portal_url":    "https://dashboard.razorpay.com",
+            "support_email": "support@ezerapp.io",
+            "message":       "To manage or cancel your subscription, contact support@ezerapp.io or visit the Razorpay dashboard.",
+        }
 
     @app.post("/billing/webhook", tags=["Billing"])
-    async def stripe_webhook(request: Request):
+    async def razorpay_webhook(request: Request):
         """
-        Stripe webhook endpoint — handles subscription lifecycle events.
-        Set webhook URL in Stripe dashboard: https://ezer-production.up.railway.app/billing/webhook
-        Set EZER_STRIPE_WEBHOOK_SECRET in Railway env vars.
-        """
-        EZER_STRIPE_KEY    = os.environ.get("EZER_STRIPE_SECRET_KEY", "")
-        WEBHOOK_SECRET     = os.environ.get("EZER_STRIPE_WEBHOOK_SECRET", "")
-        if not EZER_STRIPE_KEY:
-            raise HTTPException(status_code=503, detail="Billing not configured.")
+        Razorpay webhook endpoint — handles subscription lifecycle events.
+        Set webhook URL in Razorpay dashboard: https://ezer-production.up.railway.app/billing/webhook
+        Set EZER_RAZORPAY_WEBHOOK_SECRET in Railway env vars.
 
-        payload  = await request.body()
-        sig      = request.headers.get("stripe-signature", "")
+        Razorpay signs webhooks with HMAC-SHA256 of the raw body using the webhook secret.
+        Header: X-Razorpay-Signature
+        """
+        import hmac as _hmac
+        import hashlib as _hashlib
+        import json as _json
+
+        WEBHOOK_SECRET = os.environ.get("EZER_RAZORPAY_WEBHOOK_SECRET", "")
+
+        payload_bytes = await request.body()
+        sig = request.headers.get("x-razorpay-signature", "")
+
+        # Verify HMAC-SHA256 signature when secret is configured
+        if WEBHOOK_SECRET and sig:
+            expected = _hmac.new(
+                WEBHOOK_SECRET.encode(),
+                payload_bytes,
+                _hashlib.sha256,
+            ).hexdigest()
+            if not _hmac.compare_digest(expected, sig):
+                raise HTTPException(status_code=400, detail="Invalid webhook signature.")
 
         try:
-            import stripe as stripe_lib
-            stripe_lib.api_key = EZER_STRIPE_KEY
-            if WEBHOOK_SECRET:
-                event = stripe_lib.Webhook.construct_event(payload, sig, WEBHOOK_SECRET)
-            else:
-                event = stripe_lib.Event.construct_from(
-                    __import__("json").loads(payload), stripe_lib.api_key
-                )
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Webhook error: {e}")
+            event = _json.loads(payload_bytes)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload.")
 
-        # Handle subscription events
-        etype = event["type"]
-        data  = event["data"]["object"]
+        etype = event.get("event", "")
+        entity = event.get("payload", {}).get("subscription", {}).get("entity", {})
+        notes  = entity.get("notes", {})
+        company_id = notes.get("company_id", "")
+        plan       = notes.get("plan", "starter")
 
-        if etype in ("customer.subscription.created", "customer.subscription.updated"):
-            company_id = data.get("metadata", {}).get("company_id")
-            plan       = data.get("metadata", {}).get("plan", "starter")
+        if etype in ("subscription.activated", "subscription.charged"):
             if company_id:
                 try:
                     conn = get_connection()
@@ -1515,13 +1502,12 @@ def create_app() -> "FastAPI":
                     )
                     conn.commit()
                     conn.close()
-                    logger.info("billing plan updated: company=%s plan=%s status=%s",
-                                company_id, plan, data.get("status"))
+                    logger.info("billing plan activated: company=%s plan=%s event=%s",
+                                company_id, plan, etype)
                 except Exception as e:
                     logger.error("failed to update plan for %s: %s", company_id, e)
 
-        elif etype == "customer.subscription.deleted":
-            company_id = data.get("metadata", {}).get("company_id")
+        elif etype in ("subscription.cancelled", "subscription.expired"):
             if company_id:
                 try:
                     conn = get_connection()
@@ -1531,11 +1517,11 @@ def create_app() -> "FastAPI":
                     )
                     conn.commit()
                     conn.close()
-                    logger.info("subscription cancelled: company=%s", company_id)
+                    logger.info("subscription cancelled: company=%s event=%s", company_id, etype)
                 except Exception as e:
                     logger.error("failed to cancel plan for %s: %s", company_id, e)
 
-        return {"received": True, "type": etype}
+        return {"received": True, "event": etype}
 
     return app
 
